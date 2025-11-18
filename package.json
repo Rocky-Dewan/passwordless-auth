@@ -27,7 +27,7 @@
     "express"
   ],
   "author": "Rocky Dewan",
-  "license": "Apache",
+  "license": "GNU GENERAL PUBLIC LICENSE",
   "dependencies": {
     "argon2": "^0.41.1",
     "cookie-parser": "^1.4.6",

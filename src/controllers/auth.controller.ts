@@ -1,0 +1,98 @@
+import { Request, Response, NextFunction, Router } from 'express';
+import { injectable, inject } from 'tsyringe';
+import { StatusCodes } from 'http-status-codes';
+import { AuthService, AuthError } from '../../services/auth.service';
+import { Logger } from '../utils/logger';
+import { RateLimiterService } from '../../services/rateLimiter';
+import { AuthMiddleware } from '../middleware/auth';
+import { CsrfMiddleware } from '../middleware/csrf';
+
+// --- Configuration Constants ---
+const SESSION_COOKIE_NAME = 'session_token';
+const CSRF_COOKIE_NAME = 'csrf_secret';
+const FRONTEND_LOGIN_REDIRECT = process.env.FRONTEND_LOGIN_REDIRECT || '/dashboard';
+
+// --- Type Definitions ---
+interface LoginRequestBody {
+    email: string;
+    isRecovery?: boolean;
+}
+
+interface VerifyRequestBody {
+    token: string;
+    challengeId: string;
+    recoveryCode?: string;
+}
+
+/**
+ * @injectable
+ * Controller responsible for processing all authentication-related HTTP requests.
+ */
+@injectable()
+export class AuthController {
+    private readonly logger = new Logger(AuthController.name);
+    public router: Router;
+
+    constructor(
+        @inject(AuthService) private authService: AuthService,
+        @inject(RateLimiterService) private rateLimiterService: RateLimiterService,
+        @inject(AuthMiddleware) private authMiddleware: AuthMiddleware,
+        @inject(CsrfMiddleware) private csrfMiddleware: CsrfMiddleware
+    ) {
+        this.router = Router();
+        this.initializeRoutes();
+        this.logger.info('AuthController initialized.');
+    }
+
+    // --- 1. Route Initialization ---
+
+    private initializeRoutes(): void {
+        this.router.post('/login', this.validateLoginRequest, this.handleLogin);
+        this.router.get('/verify', this.validateVerificationRequest, this.handleVerification);
+        this.router.post('/logout', this.authMiddleware.isAuthenticated, this.csrfMiddleware.protect, this.handleLogout);
+        this.router.post('/recovery/start', this.validateLoginRequest, this.handleRecoveryStart);
+        this.router.post('/recovery/verify', this.validateRecoveryVerification, this.handleRecoveryVerification);
+        this.router.get('/status', this.authMiddleware.isAuthenticated, this.handleStatus);
+        this.router.post('/register', this.validateLoginRequest, this.handleRegistration);
+
+        // Advanced security endpoints (for future features)
+        this.router.post('/session/revoke-all', this.authMiddleware.isAuthenticated, this.csrfMiddleware.protect, this.handleRevokeAllSessions);
+        this.router.post('/session/rotate', this.authMiddleware.isAuthenticated, this.csrfMiddleware.protect, this.handleSessionRotation);
+    }
+
+    // --- 2. Input Validation Middleware ---
+
+    /**
+     * Middleware to validate the login request body (email format).
+     */
+    private validateLoginRequest = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+        const { email } = req.body as LoginRequestBody;
+
+        if (!email || typeof email !== 'string' || email.trim().length === 0) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Email is required.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        // Basic email format check (more robust validation is done in the service)
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Invalid email format.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        // Additional sanity checks
+        if (email.length > 255) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Email is too long.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        next();
+    };

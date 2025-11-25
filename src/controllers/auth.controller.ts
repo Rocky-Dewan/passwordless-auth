@@ -96,3 +96,29 @@ export class AuthController {
 
         next();
     };
+
+    /**
+     * Middleware to validate the token verification request query parameters.
+     */
+    private validateVerificationRequest = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+        const { token, challengeId } = req.query as { token: string; challengeId: string };
+
+        if (!token || !challengeId) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Missing token or challenge ID.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        // Token and challenge ID length/format validation (assuming base64url format)
+        if (token.length < 32 || challengeId.length < 16) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Token or challenge ID format is invalid.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        next();
+    };

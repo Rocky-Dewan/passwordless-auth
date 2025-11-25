@@ -1,3 +1,5 @@
+// File: passwordless-auth/src/utils/logger.ts
+// Purpose: Centralized, secure, and structured logging utility using Winston.
 
 import { createLogger, format, transports, Logger as WinstonLogger } from 'winston';
 import 'dotenv/config';
@@ -45,3 +47,66 @@ if (IS_PRODUCTION) {
         new transports.File({ filename: LOG_FILE_PATH, format: fileFormat })
     );
 }
+
+// --- Base Winston Logger Instance ---
+const baseLogger: WinstonLogger = createLogger({
+    level: LOG_LEVEL,
+    transports: transportsList,
+    exitOnError: false, // Do not exit on handled exceptions
+});
+
+/**
+ * Custom Logger class to provide context-aware logging.
+ * Usage: `const logger = new Logger('MyService'); logger.info('Message');`
+ */
+export class Logger {
+    private readonly context: string;
+
+    constructor(context: string) {
+        this.context = context;
+    }
+
+    /**
+     * Logs a message at the 'error' level.
+     * @param message - The primary message.
+     * @param meta - Optional metadata object (e.g., error object, request details).
+     */
+    public error(message: string, meta?: object): void {
+        baseLogger.error(message, { context: this.context, ...meta });
+    }
+
+    /**
+     * Logs a message at the 'warn' level.
+     * @param message - The primary message.
+     * @param meta - Optional metadata object.
+     */
+    public warn(message: string, meta?: object): void {
+        baseLogger.warn(message, { context: this.context, ...meta });
+    }
+
+    /**
+     * Logs a message at the 'info' level.
+     * @param message - The primary message.
+     * @param meta - Optional metadata object.
+     */
+    public info(message: string, meta?: object): void {
+        baseLogger.info(message, { context: this.context, ...meta });
+    }
+
+    /**
+     * Logs a message at the 'debug' level.
+     * @param message - The primary message.
+     * @param meta - Optional metadata object.
+     */
+    public debug(message: string, meta?: object): void {
+        baseLogger.debug(message, { context: this.context, ...meta });
+    }
+
+    /**
+     * Logs a message at the 'verbose' level.
+     * @param message - The primary message.
+     * @param meta - Optional metadata object.
+     */
+    public verbose(message: string, meta?: object): void {
+        baseLogger.verbose(message, { context: this.context, ...meta });
+    }

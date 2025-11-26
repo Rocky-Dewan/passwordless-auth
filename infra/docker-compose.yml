@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # --- 1. PostgreSQL Database Service ---
+  db:
+    image: postgres:14-alpine
+    container_name: auth_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-auth_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_password}
+      POSTGRES_DB: ${DB_NAME:-passwordless_auth_db}
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+      # Optional: Mount migration script for initial setup
+      # - ../scripts/migrate.sql:/docker-entrypoint-initdb.d/migrate.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- 2. Redis Cache Service ---
+  redis:
+    image: redis:7-alpine
+    container_name: auth_redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - auth_redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- 3. Node.js Application Service ---
+  app:
+    build:
+      context: ../
+      dockerfile: infra/Dockerfile
+      # Use a dedicated build argument for environment, e.g., to install dev dependencies
+      args:
+        NODE_ENV: development
+    container_name: passwordless_auth_app
+    restart: always
+    environment:
+      # Application Environment Variables
+      NODE_ENV: development
+      PORT: ${PORT:-3000}
+      # Database Connection
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-auth_user}
+      DB_PASSWORD: ${DB_PASSWORD:-secure_password}
+      DB_NAME: ${DB_NAME:-passwordless_auth_db}
+      # Redis Connection
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Security Secrets (MUST be managed securely in production)
+      JWT_SECRET: ${JWT_SECRET:-a_very_long_and_complex_jwt_secret_key_for_testing_purposes_only}
+      CSRF_SECRET: ${CSRF_SECRET:-a_very_long_and_complex_csrf_secret_key_for_testing_purposes_only}
+      # Email Service
+      EMAIL_SENDER: ${EMAIL_SENDER:-noreply@secureauth.com}
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      # IP Geolocation (using free service, no key needed)
+      IP_GEOLOCATION_API_URL: http://ip-api.com/json/
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # Mount source code for live reloading (development only)
+      - ../:/usr/src/app
+      - /usr/src/app/node_modules # Exclude node_modules from host mount
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Command to run in development mode (e.g., nodemon for live reload)
+    command: pnpm run dev
+
+# --- 4. Volumes for Persistence ---
+volumes:
+  auth_db_data:
+  auth_redis_data:
+
+    # --- 5. Network (Optional, using default bridge) ---
+    # networks:
+    #   auth_network:
+    #     driver: bridge
+

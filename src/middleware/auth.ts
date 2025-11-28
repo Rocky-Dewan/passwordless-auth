@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { injectable, inject } from 'tsyringe';
-import { HttpStatusCode } from 'http-status-codes';
+import { StatusCodes } from 'http-status-codes';
 import { AuthService, AuthError } from '../../services/auth.service';
 import { Logger } from '../utils/logger';
 import { RedisService } from '../../services/redis.service';

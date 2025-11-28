@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import crypto from 'crypto';
 import * as argon2 from 'argon2';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -6,6 +6,7 @@ import { injectable } from 'tsyringe';
 import { Logger } from '../src/utils/logger';
 
 // --- Configuration Constants ---
+const hash = crypto.createHash('sha256').update(buffer).digest('hex');
 const OTP_LENGTH = 6;
 const TOKEN_LENGTH_BYTES = 32;
 const CHALLENGE_LENGTH_BYTES = 16;
@@ -102,6 +103,70 @@ export class CryptoService {
         } catch (error) {
             this.logger.error('Failed to generate numeric OTP.', { error });
             throw new CryptoError('OTP generation failed.', 'OTP_FAIL');
+        }
+    }
+
+    /**
+     * Generates a unique, non-guessable challenge ID for stateful token tracking.
+     * @returns A secure challenge ID string.
+     */
+    public generateChallengeId(): string {
+        return this.generateRandomString(CHALLENGE_LENGTH_BYTES);
+    }
+
+    /**
+     * Generates a long-lived, high-entropy session token.
+     * @returns A secure session token string.
+     */
+    public generateSessionToken(): string {
+        return this.generateRandomString(SESSION_TOKEN_LENGTH_BYTES);
+    }
+
+    /**
+     * Generates a UUID V4 for general unique identifier needs.
+     * @returns A UUID V4 string.
+     */
+    public generateUUID(): string {
+        return uuidv4();
+    }
+
+    // --- 2. Hashing and Verification (Argon2 for sensitive data) ---
+
+    /**
+     * Hashes a secret string (e.g., recovery code, internal API key) using Argon2id.
+     * A global pepper is applied to mitigate rainbow table attacks even if the database is compromised.
+     * @param secret - The string to hash.
+     * @returns The Argon2id hash string.
+     */
+    public async hashSecret(secret: string): Promise<string> {
+        if (!secret) {
+            throw new CryptoError('Cannot hash an empty secret.', 'EMPTY_SECRET');
+        }
+        const pepperedSecret = secret + PEPPER;
+        try {
+            return await argon2.hash(pepperedSecret, ARGON2_CONFIG);
+        } catch (error) {
+            this.logger.error('Argon2 hashing failed.', { error });
+            throw new CryptoError('Argon2 hashing failed.', 'HASH_FAIL');
+        }
+    }
+
+    /**
+     * Verifies a secret against a stored Argon2id hash.
+     * @param hash - The stored hash.
+     * @param secret - The secret to verify.
+     * @returns True if the secret matches the hash, false otherwise.
+     */
+    public async verifySecret(hash: string, secret: string): Promise<boolean> {
+        if (!hash || !secret) {
+            return false;
+        }
+        const pepperedSecret = secret + PEPPER;
+        try {
+            return await argon2.verify(hash, pepperedSecret);
+        } catch (error) {
+            this.logger.warn('Argon2 verification failed (possible tampering or invalid hash format).', { error });
+            return false;
         }
     }
 }

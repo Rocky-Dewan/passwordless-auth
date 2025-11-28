@@ -49,10 +49,11 @@ export class AuthMiddleware {
 
         try {
             // 1. Validate the token and retrieve the payload
-            const payload = await this.authService.validateSessionToken(sessionToken);
+            // const payload = await this.authService.validateSessionToken(sessionToken);
 
-            // 2. Perform advanced session checks (e.g., is session revoked?)
-            const isRevoked = await this.authService.isSessionRevoked(payload.sessionId);
+            // // 2. Perform advanced session checks (e.g., is session revoked?)
+            // const isRevoked = await this.authService.isSessionRevoked(payload.sessionId);
+            const payload = await this.authService.validateSession(req, sessionToken);
             if (isRevoked) {
                 return this.handleAuthFailure(req, res, next, 'SESSION_REVOKED');
             }

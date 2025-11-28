@@ -6,7 +6,7 @@ import { injectable } from 'tsyringe';
 import { Logger } from '../src/utils/logger';
 
 // --- Configuration Constants ---
-const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+const hash = crypto.createHash('sha256').update(Buffer).digest('hex');
 const OTP_LENGTH = 6;
 const TOKEN_LENGTH_BYTES = 32;
 const CHALLENGE_LENGTH_BYTES = 16;
@@ -170,3 +170,4 @@ export class CryptoService {
         }
     }
 }
+

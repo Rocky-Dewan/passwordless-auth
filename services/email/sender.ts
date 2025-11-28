@@ -100,56 +100,55 @@ export class EmailService {
         }
     }
 
-    // --------------------------------------------------------------------
-    // ✅ ADD THESE REQUIRED METHODS — used by AuthService for notifications
-    // --------------------------------------------------------------------
-
+    
     public async sendNewDeviceNotification(email: string): Promise<void> {
         return this.sendEmail({
             to: email,
-            type: 'new_device',
+            type: EmailType.NEW_DEVICE_LOGIN,
             subject: 'New Device Detected',
             templateData: {
                 message: 'A new device was used to access your account.',
-                ipAddress: undefined
+                ipAddress: undefined,
+                appName: APP_NAME
             }
         });
     }
-
+    
     public async sendRecoveryCodeGenerationNotification(email: string): Promise<void> {
         return this.sendEmail({
             to: email,
-            type: 'recovery_code_generated',
+            type: EmailType.RECOVERY_CODES,
             subject: 'Recovery Code Created',
             templateData: {
                 message: 'A password recovery code has been generated for your account.',
-                ipAddress: undefined
+                ipAddress: undefined,
+                appName: APP_NAME
             }
         });
     }
-
+    
     public async sendAccountLockedNotification(email: string): Promise<void> {
         return this.sendEmail({
             to: email,
-            type: 'account_locked',
+            type: EmailType.ACCOUNT_LOCKED,
             subject: 'Your Account Has Been Locked',
             templateData: {
                 message: 'Your account is temporarily locked due to suspicious activity.',
-                ipAddress: undefined
+                ipAddress: undefined,
+                appName: APP_NAME
             }
         });
     }
-
+    
     public async sendSecurityAlert(email: string, message: string): Promise<void> {
         return this.sendEmail({
             to: email,
-            type: 'security_alert',
+            type: EmailType.SESSION_REVOKED, // or another appropriate EmailType
             subject: 'Security Alert',
             templateData: {
                 message,
-                ipAddress: undefined
+                ipAddress: undefined,
+                appName: APP_NAME
             }
         });
-    }
-
-
+}

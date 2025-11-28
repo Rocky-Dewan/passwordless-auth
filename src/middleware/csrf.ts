@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { injectable, inject } from 'tsyringe';
-import { HttpStatusCode } from 'http-status-codes';
+import { StatusCodes } from 'http-status-codes';
 import { CryptoService } from '../../services/crypto';
 import { Logger } from '../utils/logger';
 import { AuthError } from '../../services/auth.service';
@@ -77,3 +77,4 @@ export class CsrfMiddleware {
         next();
     };
 }
+

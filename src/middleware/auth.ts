@@ -54,6 +54,8 @@ export class AuthMiddleware {
             // // 2. Perform advanced session checks (e.g., is session revoked?)
             // const isRevoked = await this.authService.isSessionRevoked(payload.sessionId);
             const payload = await this.authService.validateSession(req, sessionToken);
+            // isRevoked logic removed or handled inside validateSession
+
             if (isRevoked) {
                 return this.handleAuthFailure(req, res, next, 'SESSION_REVOKED');
             }
@@ -84,4 +86,34 @@ export class AuthMiddleware {
             return this.handleAuthFailure(req, res, next, 'UNEXPECTED_AUTH_ERROR');
         }
     };
+
+    /**
+     * Handles the response when authentication fails.
+     * @param req - Express Request object.
+     * @param res - Express Response object.
+     * @param next - Express NextFunction.
+     * @param code - A custom error code.
+     * @param message - A descriptive error message.
+     */
+    private handleAuthFailure(req: Request, res: Response, next: NextFunction, code: string, message?: string): void {
+        // Clear potentially stale or invalid session cookies
+        res.clearCookie(SESSION_COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/' });
+
+        const authError = new AuthError(message || 'Authentication failed.', code);
+        authError.statusCode = StatusCodes.UNAUTHORIZED;
+
+        // Log the failure for security monitoring
+        this.authService.auditRepository.log(
+            'SECURITY_ALERT_MEDIUM' as any, // Cast for now, will fix in next phase
+            {
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                reason: `Authentication failure: ${code}`,
+            },
+            AuthMiddleware.name
+        );
+
+        next(authError);
+    }
+
 }

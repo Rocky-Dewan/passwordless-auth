@@ -1,7 +1,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { injectable, inject } from 'tsyringe';
-import { HttpStatusCode } from 'http-status-codes';
+import { StatusCodes } from 'http-status-codes';
 import { RateLimiterService } from '../../services/rateLimiter';
 import { Logger } from '../utils/logger';
 import { AuthError } from '../../services/auth.service';
@@ -75,7 +75,7 @@ export class RateLimitMiddleware {
                         `Too many requests. Please try again in ${retryAfter} seconds.`,
                         'RATE_LIMIT_EXCEEDED'
                     );
-                    error.statusCode = HttpStatusCode.TOO_MANY_REQUESTS;
+                    error.statusCode = StatusCodes.TOO_MANY_REQUESTS;
                     return next(error);
                 }
 
@@ -105,3 +105,4 @@ export class RateLimitMiddleware {
         };
     }
 }
+

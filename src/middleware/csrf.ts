@@ -76,5 +76,29 @@ export class CsrfMiddleware {
         // 4. Success
         next();
     };
+
+    /**
+     * Handles the response when CSRF validation fails.
+     * @param req - Express Request object.
+     * @param next - Express NextFunction.
+     * @param code - A custom error code.
+     */
+    private handleCsrfFailure(req: Request, next: NextFunction, code: string): void {
+        const authError = new AuthError('CSRF token validation failed.', code);
+        authError.statusCode = StatusCodes.FORBIDDEN;
+
+        // Log the failure for security monitoring
+        // NOTE: In a real app, this should log to the AuditRepository
+        this.logger.error(`CSRF Failure: ${code}`, {
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent'),
+            path: req.path,
+            method: req.method,
+        });
+
+        next(authError);
+    }
+
 }
+
 

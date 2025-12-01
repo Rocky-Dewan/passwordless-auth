@@ -169,5 +169,31 @@ export class CryptoService {
             return false;
         }
     }
-}
 
+    // --- 3. Device Fingerprinting and Integrity Check ---
+
+    /**
+     * Extracts essential device metadata from an Express request object.
+     * This is a minimal, privacy-respecting fingerprint.
+     * @param req - The Express Request object.
+     * @returns The extracted DeviceMetadata object.
+     */
+    public extractDeviceMetadata(req: Request): DeviceMetadata {
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] as string || req.socket.remoteAddress as string || 'unknown';
+        const userAgent = req.headers['user-agent'] || 'unknown';
+        const acceptLanguage = req.headers['accept-language'] || 'unknown';
+
+        // Extracting optional Client Hints for a more robust fingerprint
+        const secChUa = req.headers['sec-ch-ua'] as string;
+        const secChUaMobile = req.headers['sec-ch-ua-mobile'] as string;
+        const secChUaPlatform = req.headers['sec-ch-ua-platform'] as string;
+
+        return {
+            ipAddress: this.normalizeIpAddress(ipAddress),
+            userAgent: userAgent.substring(0, 255), // Truncate long user agents
+            acceptLanguage: acceptLanguage.substring(0, 100),
+            secChUa: secChUa ? secChUa.substring(0, 255) : undefined,
+            secChUaMobile: secChUaMobile,
+            secChUaPlatform: secChUaPlatform ? secChUaPlatform.substring(0, 50) : undefined,
+        };
+    }

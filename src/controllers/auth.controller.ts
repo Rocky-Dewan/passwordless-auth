@@ -122,3 +122,39 @@ export class AuthController {
 
         next();
     };
+
+    /**
+     * Middleware to validate recovery code verification request body.
+     */
+    private validateRecoveryVerification = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+        const { email, recoveryCode } = req.body as { email: string; recoveryCode: string };
+
+        if (!email || !recoveryCode) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Email and recovery code are required.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Invalid email format.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        // Recovery code format validation (e.g., XXXX-XXXX-XXXX-XXXX)
+        if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(recoveryCode.toUpperCase())) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                status: 'error',
+                message: 'Invalid recovery code format.',
+                code: 'VALIDATION_ERROR',
+            });
+        }
+
+        next();
+    };
+
+}

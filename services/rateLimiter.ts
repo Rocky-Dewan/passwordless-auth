@@ -52,4 +52,36 @@ export class RateLimiterService {
         };
         this.logger.info('RateLimiterService initialized with multi-layer limits.');
     }
+
+    // --- Core Rate Limiting Logic (Fixed Window) ---
+
+    /**
+     * Checks if a specific key has exceeded its rate limit based on a configuration.
+     * Implements a secure fixed-window counter.
+     * @param key - The unique identifier (IP, email, token ID).
+     * @param configName - The name of the rate limit configuration.
+     * @returns True if the limit is exceeded, false otherwise.
+     */
+    private async checkLimit(key: string, configName: keyof typeof this.configs): Promise<boolean> {
+        const config = this.configs[configName];
+        if (!config) {
+            this.logger.error(`Unknown rate limit configuration: ${configName}`);
+            return false;
+        }
+
+        const redisKey = config.prefix + key;
+        const currentCount = await this.redisService.incr(redisKey);
+
+        if (currentCount === 1) {
+            // First hit, set the expiration window
+            await this.redisService.expire(redisKey, config.window);
+        }
+
+        if (currentCount > config.max) {
+            this.logger.warn(`Rate limit exceeded for ${configName} on key: ${key}. Count: ${currentCount}/${config.max}`);
+            return true;
+        }
+
+        return false;
+    }
 }

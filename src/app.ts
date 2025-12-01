@@ -11,7 +11,7 @@ import helmet from 'helmet';
 import { initializeDatabaseAndDI } from './utils/database';
 import { Logger } from './utils/logger';
 import { AuthRoutes } from './routes/auth.routes';
-import { HttpStatusCode } from 'http-status-codes';
+import { StatusCodes } from 'http-status-codes';
 import { RateLimitMiddleware } from './middleware/rateLimit';
 import { CsrfMiddleware } from './middleware/csrf';
 import { AuthMiddleware } from './middleware/auth';
@@ -34,16 +34,16 @@ const errorHandler = (err: CustomError, req: Request, res: Response, next: NextF
         path: req.path,
         method: req.method,
         ip: req.ip,
-        statusCode: err.statusCode || HttpStatusCode.INTERNAL_SERVER_ERROR,
+        statusCode: err.statusCode || StatusCodes.INTERNAL_SERVER_ERROR,
         errorCode: err.code || 'SERVER_ERROR',
     });
 
     // Check if it's a known AuthError or a general operational error
     const statusCode = err instanceof AuthError
-        ? HttpStatusCode.UNAUTHORIZED // For AuthErrors like invalid token, etc.
-        : err.statusCode || HttpStatusCode.INTERNAL_SERVER_ERROR;
+        ? StatusCodes.UNAUTHORIZED // For AuthErrors like invalid token, etc.
+        : err.statusCode || StatusCodes.INTERNAL_SERVER_ERROR;
 
-    const message = statusCode === HttpStatusCode.INTERNAL_SERVER_ERROR && process.env.NODE_ENV === 'production'
+    const message = statusCode === StatusCodes.INTERNAL_SERVER_ERROR && process.env.NODE_ENV === 'production'
         ? 'An unexpected error occurred.'
         : err.message;
 
@@ -152,7 +152,7 @@ export class App {
 
         // Basic health check route (unprotected)
         this.app.get('/health', (req: Request, res: Response) => {
-            res.status(HttpStatusCode.OK).json({ status: 'ok', uptime: process.uptime() });
+            res.status(StatusCodes.OK).json({ status: 'ok', uptime: process.uptime() });
         });
 
         // Auth Routes (login, verify, logout)
@@ -163,12 +163,12 @@ export class App {
         const authMiddleware = container.resolve(AuthMiddleware);
         this.app.get('/protected', authMiddleware.isAuthenticated, (req: Request, res: Response) => {
             // @ts-ignore
-            res.status(HttpStatusCode.OK).json({ message: 'Access granted to protected resource.', userId: req.userId });
+            res.status(StatusCodes.OK).json({ message: 'Access granted to protected resource.', userId: req.userId });
         });
 
         // 404 Not Found Handler
         this.app.use((req: Request, res: Response) => {
-            res.status(HttpStatusCode.NOT_FOUND).json({
+            res.status(StatusCodes.NOT_FOUND).json({
                 status: 'error',
                 message: `Cannot ${req.method} ${req.path}`,
                 code: 'NOT_FOUND',
@@ -192,3 +192,5 @@ export class App {
             logger.info(`Server is running on port ${port}`);
         });
     }
+
+}

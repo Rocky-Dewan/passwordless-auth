@@ -197,3 +197,4 @@ export class CryptoService {
             secChUaPlatform: secChUaPlatform ? secChUaPlatform.substring(0, 50) : undefined,
         };
     }
+}

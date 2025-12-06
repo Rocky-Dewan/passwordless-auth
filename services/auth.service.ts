@@ -1,4 +1,3 @@
-
 import { Request } from 'express';
 import { injectable, inject } from 'tsyringe';
 import { CryptoService, DeviceMetadata } from './crypto';
@@ -65,3 +64,37 @@ export class AuthService {
     ) {
         this.logger.info('AuthService initialized with all dependencies.');
     }
+
+    // --- 1. Login Initiation (Magic Link/OTP Request) ---
+
+    /**
+     * Handles the initial login request by email.
+     * Performs extensive security checks before generating and sending a token.
+     * @param req - The Express Request object containing user and device data.
+     * @param email - The user's email address.
+     */
+    public async initiateLogin(req: Request, email: string): Promise<void> {
+        const normalizedEmail = email.toLowerCase().trim();
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
+
+        this.logger.info(`Login initiation for email: ${normalizedEmail} from IP: ${ipAddress}`);
+
+        // --- Security Check 1: Global IP Rate Limit ---
+        const ipLimitReached = await this.rateLimiterService.checkGlobalLimit(ipAddress);
+        if (ipLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { email: normalizedEmail, ipAddress });
+            throw new AuthError('Too many requests from this IP address.', 'IP_RATE_LIMITED');
+        }
+
+        let user: User | null;
+        try {
+            user = await this.userRepository.findByEncryptedEmail(normalizedEmail);
+        } catch (error) {
+            this.logger.error('Database error during user lookup.', { error });
+            throw new AuthError('Internal server error.', 'DB_ERROR');
+        }
+
+    }
+
+}

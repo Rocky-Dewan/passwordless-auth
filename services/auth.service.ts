@@ -127,6 +127,23 @@ export class AuthService {
             this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { userId: user.id, reason: 'Email request limit', ipAddress });
             throw new AuthError('Too many login requests for this account. Please wait a few minutes.', 'EMAIL_RATE_LIMITED');
         }
+
+            // --- 2. Token Generation and Storage ---
+
+        const token = this.cryptoService.generateAuthToken();
+        const challengeId = this.cryptoService.generateChallengeId();
+        const expiresAt = new Date(Date.now() + LOGIN_TOKEN_EXPIRY_MINUTES * 60 * 1000);
+        const fingerprintHash = this.cryptoService.createDeviceFingerprintHash(metadata);
+
+        const authToken = {
+            token,
+            challengeId,
+            userId: user.id,
+            expiresAt: expiresAt.getTime(),
+            fingerprintHash,
+            isUsed: false,
+            attemptCount: 0,
+        };
     }
 
 }

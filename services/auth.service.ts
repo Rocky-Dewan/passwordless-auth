@@ -95,6 +95,38 @@ export class AuthService {
             throw new AuthError('Internal server error.', 'DB_ERROR');
         }
 
+        // --- Security Check 2: User Existence and Account Status ---
+        if (!user) {
+            // Log the attempt for security, but return a generic success message to prevent enumeration
+            this.logger.warn(`Attempted login for non-existent email: ${normalizedEmail}`);
+            await this.rateLimiterService.incrementLoginAttempt(normalizedEmail); // Still rate limit non-existent users
+            await this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { email: normalizedEmail, reason: 'Non-existent user', ipAddress });
+            // Fail silently to prevent user enumeration
+            return;
+        }
+
+        // --- Security Check 3: Account Lockout Check ---
+        if (user.status === UserStatus.LOCKED) {
+            const lockedUntil = new Date(user.lockedUntil!);
+            if (lockedUntil > new Date()) {
+                this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: user.id, reason: 'Account locked', ipAddress });
+                throw new AuthError('Account is temporarily locked. Please try again later.', 'ACCOUNT_LOCKED');
+            } else {
+                // Automatically unlock the account after the lockout period
+                user.status = UserStatus.ACTIVE;
+                user.failedLoginAttempts = 0;
+                user.lockedUntil = null;
+                await this.userRepository.save(user);
+                this.auditRepository.log(AuditAction.ACCOUNT_UNLOCKED, { userId: user.id, reason: 'Lockout period expired' });
+            }
+        }
+
+        // --- Security Check 4: Account-Specific Rate Limit (Email Flooding Prevention) ---
+        const emailLimitReached = await this.rateLimiterService.checkEmailRequestLimit(normalizedEmail);
+        if (emailLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { userId: user.id, reason: 'Email request limit', ipAddress });
+            throw new AuthError('Too many login requests for this account. Please wait a few minutes.', 'EMAIL_RATE_LIMITED');
+        }
     }
 
 }

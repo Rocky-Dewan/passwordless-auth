@@ -144,6 +144,26 @@ export class AuthService {
             isUsed: false,
             attemptCount: 0,
         };
+
+            // Store the token in Redis for fast access and short-term persistence
+        const tokenKey = `auth:token:${challengeId}`;
+        await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
+
+        this.logger.info(`Generated token for user ${user.id} with challenge ID: ${challengeId}`);
+
+        // --- 3. Email Dispatch and Audit Log ---
+
+        const loginLink = this.generateLoginLink(token, challengeId);
+        const emailSent = await this.emailService.sendLoginLink(normalizedEmail, loginLink, LOGIN_TOKEN_EXPIRY_MINUTES);
+
+        if (emailSent) {
+            await this.rateLimiterService.incrementEmailRequest(normalizedEmail);
+            this.auditRepository.log(AuditAction.LOGIN_LINK_SENT, { userId: user.id, challengeId, ipAddress });
+        } else {
+            // Handle email failure gracefully (e.g., alert ops, but don't fail the user request)
+            this.logger.error(`Failed to send login link to ${normalizedEmail}`);
+            this.auditRepository.log(AuditAction.EMAIL_SEND_FAILED, { userId: user.id, challengeId });
+        }
     }
 
 }

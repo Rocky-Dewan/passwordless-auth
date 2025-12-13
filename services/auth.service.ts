@@ -165,5 +165,48 @@ export class AuthService {
             this.auditRepository.log(AuditAction.EMAIL_SEND_FAILED, { userId: user.id, challengeId });
         }
     }
+    /**
+     * Generates the secure, stateful login link.
+     * @param token - The authentication token.
+     * @param challengeId - The unique challenge ID.
+     * @returns The full login URL.
+     */
+    private generateLoginLink(token: string, challengeId: string): string {
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        return `${baseUrl}/auth/verify?token=${token}&challengeId=${challengeId}`;
+    }
+
+    // --- 2. Token Verification and Session Creation ---
+
+    /**
+     * Validates the login token and creates a secure, device-bound session.
+     * @param req - The Express Request object.
+     * @param token - The token from the URL.
+     * @param challengeId - The challenge ID from the URL.
+     * @returns A secure session token string.
+     */
+    public async verifyTokenAndCreateSession(req: Request, token: string, challengeId: string): Promise<string> {
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
+
+        this.logger.info(`Verification attempt for challenge ID: ${challengeId} from IP: ${ipAddress}`);
+
+        // --- Security Check 1: Global IP Rate Limit ---
+        const ipLimitReached = await this.rateLimiterService.checkGlobalLimit(ipAddress);
+        if (ipLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { challengeId, ipAddress });
+            throw new AuthError('Too many verification requests from this IP address.', 'IP_RATE_LIMITED');
+        }
+
+        const tokenKey = `auth:token:${challengeId}`;
+        const tokenDataRaw = await this.redisService.get(tokenKey);
+
+        if (!tokenDataRaw) {
+            // Log the failed attempt, but don't reveal if the token existed or expired
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { challengeId, reason: 'Token not found/expired', ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        const tokenData = JSON.parse(tokenDataRaw);
 
 }

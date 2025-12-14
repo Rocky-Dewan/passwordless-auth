@@ -208,5 +208,18 @@ export class AuthService {
         }
 
         const tokenData = JSON.parse(tokenDataRaw);
+       // --- Security Check 2: Token Attempt Limit ---
+        if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
+            await this.redisService.del(tokenKey); // Invalidate the token
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
+            throw new AuthError('Maximum verification attempts reached. Please request a new login link.', 'MAX_ATTEMPTS_REACHED');
+        }
 
+        // --- Security Check 3: Token Expiration and Usage ---
+        if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
+            await this.redisService.del(tokenKey);
+            const reason = tokenData.isUsed ? 'Token already used (Replay attack attempt)' : 'Token expired';
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
 }

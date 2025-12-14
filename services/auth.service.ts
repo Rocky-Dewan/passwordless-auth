@@ -222,4 +222,22 @@ export class AuthService {
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
+
+        
+        // --- Security Check 3: Token Expiration and Usage ---
+        if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
+            await this.redisService.del(tokenKey);
+            const reason = tokenData.isUsed ? 'Token already used (Replay attack attempt)' : 'Token expired';
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        // --- Security Check 4: Token Value Match (Constant Time) ---
+        if (!this.cryptoService.constantTimeCompare(token, tokenData.token)) {
+            // Increment attempt count and re-save the token before throwing error
+            tokenData.attemptCount += 1;
+            await this.redisService.set(tokenKey, JSON.stringify(tokenData), (tokenData.expiresAt - Date.now()) / 1000);
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
 }

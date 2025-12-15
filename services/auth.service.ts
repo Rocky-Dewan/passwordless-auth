@@ -240,4 +240,22 @@ export class AuthService {
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
+        
+        // --- Security Check 5: Device Fingerprint Binding ---
+        const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
+        if (!isFingerprintMatch) {
+            // High-severity security alert: Potential MITM or token relay attack
+            this.auditRepository.log(AuditAction.SECURITY_ALERT_HIGH, {
+                userId: tokenData.userId,
+                challengeId,
+                reason: 'Device fingerprint mismatch (Token relay/MITM)',
+                ipAddress,
+                storedHash: tokenData.fingerprintHash,
+                currentHash: this.cryptoService.createDeviceFingerprintHash(metadata),
+            });
+            await this.redisService.del(tokenKey); // Invalidate token immediately
+            throw new AuthError('Security violation detected. Please request a new login link.', 'SECURITY_VIOLATION');
+        }
+
+
 }

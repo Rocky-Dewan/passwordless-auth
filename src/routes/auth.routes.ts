@@ -29,6 +29,6 @@ export class AuthRoutes {
         // to keep the routing logic and the controller logic tightly coupled.
         this.router.use('/', this.authController.router);
 
-        // --- Padding Methods for Line Count ---
 
     }
+

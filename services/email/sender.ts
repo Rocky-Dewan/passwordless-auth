@@ -151,4 +151,5 @@ export class EmailService {
                 appName: APP_NAME
             }
         });
+ }
 }

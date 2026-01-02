@@ -1,4 +1,3 @@
-
 import { Request } from 'express';
 import { injectable, inject } from 'tsyringe';
 import { CryptoService, DeviceMetadata } from './crypto';
@@ -64,4 +63,230 @@ export class AuthService {
         @inject(RedisService) private redisService: RedisService // For token and session storage
     ) {
         this.logger.info('AuthService initialized with all dependencies.');
+    }
+
+    // --- 1. Login Initiation (Magic Link/OTP Request) ---
+
+    /**
+     * Handles the initial login request by email.
+     * Performs extensive security checks before generating and sending a token.
+     * @param req - The Express Request object containing user and device data.
+     * @param email - The user's email address.
+     */
+    public async initiateLogin(req: Request, email: string): Promise<void> {
+        const normalizedEmail = email.toLowerCase().trim();
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
+
+        this.logger.info(`Login initiation for email: ${normalizedEmail} from IP: ${ipAddress}`);
+
+        // --- Security Check 1: Global IP Rate Limit ---
+        const ipLimitReached = await this.rateLimiterService.checkGlobalLimit(ipAddress);
+        if (ipLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { email: normalizedEmail, ipAddress });
+            throw new AuthError('Too many requests from this IP address.', 'IP_RATE_LIMITED');
+        }
+
+        let user: User | null;
+        try {
+            user = await this.userRepository.findByEncryptedEmail(normalizedEmail);
+        } catch (error) {
+            this.logger.error('Database error during user lookup.', { error });
+            throw new AuthError('Internal server error.', 'DB_ERROR');
+        }
+
+        // --- Security Check 2: User Existence and Account Status ---
+        if (!user) {
+            // Log the attempt for security, but return a generic success message to prevent enumeration
+            this.logger.warn(`Attempted login for non-existent email: ${normalizedEmail}`);
+            await this.rateLimiterService.incrementLoginAttempt(normalizedEmail); // Still rate limit non-existent users
+            await this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { email: normalizedEmail, reason: 'Non-existent user', ipAddress });
+            // Fail silently to prevent user enumeration
+            return;
+        }
+
+        // --- Security Check 3: Account Lockout Check ---
+        if (user.status === UserStatus.LOCKED) {
+            const lockedUntil = new Date(user.lockedUntil!);
+            if (lockedUntil > new Date()) {
+                this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: user.id, reason: 'Account locked', ipAddress });
+                throw new AuthError('Account is temporarily locked. Please try again later.', 'ACCOUNT_LOCKED');
+            } else {
+                // Automatically unlock the account after the lockout period
+                user.status = UserStatus.ACTIVE;
+                user.failedLoginAttempts = 0;
+                user.lockedUntil = null;
+                await this.userRepository.save(user);
+                this.auditRepository.log(AuditAction.ACCOUNT_UNLOCKED, { userId: user.id, reason: 'Lockout period expired' });
+            }
+        }
+
+        // --- Security Check 4: Account-Specific Rate Limit (Email Flooding Prevention) ---
+        const emailLimitReached = await this.rateLimiterService.checkEmailRequestLimit(normalizedEmail);
+        if (emailLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { userId: user.id, reason: 'Email request limit', ipAddress });
+            throw new AuthError('Too many login requests for this account. Please wait a few minutes.', 'EMAIL_RATE_LIMITED');
+        }
+
+        // --- 2. Token Generation and Storage ---
+
+        const token = this.cryptoService.generateAuthToken();
+        const challengeId = this.cryptoService.generateChallengeId();
+        const expiresAt = new Date(Date.now() + LOGIN_TOKEN_EXPIRY_MINUTES * 60 * 1000);
+        const fingerprintHash = this.cryptoService.createDeviceFingerprintHash(metadata);
+
+        const authToken = {
+            token,
+            challengeId,
+            userId: user.id,
+            expiresAt: expiresAt.getTime(),
+            fingerprintHash,
+            isUsed: false,
+            attemptCount: 0,
+        };
+
+        // Store the token in Redis for fast access and short-term persistence
+        const tokenKey = `auth:token:${challengeId}`;
+        await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
+
+        this.logger.info(`Generated token for user ${user.id} with challenge ID: ${challengeId}`);
+
+        // --- 3. Email Dispatch and Audit Log ---
+
+        const loginLink = this.generateLoginLink(token, challengeId);
+        const emailSent = await this.emailService.sendLoginLink(normalizedEmail, loginLink, LOGIN_TOKEN_EXPIRY_MINUTES);
+
+        if (emailSent) {
+            await this.rateLimiterService.incrementEmailRequest(normalizedEmail);
+            this.auditRepository.log(AuditAction.LOGIN_LINK_SENT, { userId: user.id, challengeId, ipAddress });
+        } else {
+            // Handle email failure gracefully (e.g., alert ops, but don't fail the user request)
+            this.logger.error(`Failed to send login link to ${normalizedEmail}`);
+            this.auditRepository.log(AuditAction.EMAIL_SEND_FAILED, { userId: user.id, challengeId });
+        }
+    }
+
+    /**
+     * Generates the secure, stateful login link.
+     * @param token - The authentication token.
+     * @param challengeId - The unique challenge ID.
+     * @returns The full login URL.
+     */
+    private generateLoginLink(token: string, challengeId: string): string {
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        return `${baseUrl}/auth/verify?token=${token}&challengeId=${challengeId}`;
+    }
+
+    // --- 2. Token Verification and Session Creation ---
+
+    /**
+     * Validates the login token and creates a secure, device-bound session.
+     * @param req - The Express Request object.
+     * @param token - The token from the URL.
+     * @param challengeId - The challenge ID from the URL.
+     * @returns A secure session token string.
+     */
+    public async verifyTokenAndCreateSession(req: Request, token: string, challengeId: string): Promise<string> {
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
+
+        this.logger.info(`Verification attempt for challenge ID: ${challengeId} from IP: ${ipAddress}`);
+
+        // --- Security Check 1: Global IP Rate Limit ---
+        const ipLimitReached = await this.rateLimiterService.checkGlobalLimit(ipAddress);
+        if (ipLimitReached) {
+            this.auditRepository.log(AuditAction.RATE_LIMIT_EXCEEDED, { challengeId, ipAddress });
+            throw new AuthError('Too many verification requests from this IP address.', 'IP_RATE_LIMITED');
+        }
+
+        const tokenKey = `auth:token:${challengeId}`;
+        const tokenDataRaw = await this.redisService.get(tokenKey);
+
+        if (!tokenDataRaw) {
+            // Log the failed attempt, but don't reveal if the token existed or expired
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { challengeId, reason: 'Token not found/expired', ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        const tokenData = JSON.parse(tokenDataRaw);
+
+        // --- Security Check 2: Token Attempt Limit ---
+        if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
+            await this.redisService.del(tokenKey); // Invalidate the token
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
+            throw new AuthError('Maximum verification attempts reached. Please request a new login link.', 'MAX_ATTEMPTS_REACHED');
+        }
+
+        // --- Security Check 3: Token Expiration and Usage ---
+        if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
+            await this.redisService.del(tokenKey);
+            const reason = tokenData.isUsed ? 'Token already used (Replay attack attempt)' : 'Token expired';
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        // --- Security Check 4: Token Value Match (Constant Time) ---
+        if (!this.cryptoService.constantTimeCompare(token, tokenData.token)) {
+            // Increment attempt count and re-save the token before throwing error
+            tokenData.attemptCount += 1;
+            await this.redisService.set(tokenKey, JSON.stringify(tokenData), (tokenData.expiresAt - Date.now()) / 1000);
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        // --- Security Check 5: Device Fingerprint Binding ---
+        const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
+        if (!isFingerprintMatch) {
+            // High-severity security alert: Potential MITM or token relay attack
+            this.auditRepository.log(AuditAction.SECURITY_ALERT_HIGH, {
+                userId: tokenData.userId,
+                challengeId,
+                reason: 'Device fingerprint mismatch (Token relay/MITM)',
+                ipAddress,
+                storedHash: tokenData.fingerprintHash,
+                currentHash: this.cryptoService.createDeviceFingerprintHash(metadata),
+            });
+            await this.redisService.del(tokenKey); // Invalidate token immediately
+            throw new AuthError('Security violation detected. Please request a new login link.', 'SECURITY_VIOLATION');
+        }
+
+        // --- Success: Invalidate Token and Create Session ---
+
+        // 1. Mark token as used and delete from Redis
+        tokenData.isUsed = true;
+        await this.redisService.del(tokenKey);
+
+        // 2. Load user and update last login
+        const user = await this.userRepository.findById(tokenData.userId);
+        if (!user) {
+            throw new AuthError('User not found after successful verification.', 'USER_NOT_FOUND');
+        }
+        user.lastLogin = new Date();
+        user.failedLoginAttempts = 0;
+        await this.userRepository.save(user);
+
+        // 3. Create Session
+        const sessionToken = this.cryptoService.generateSessionToken();
+        const sessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+        const sessionPayload: SessionPayload = {
+            userId: user.id,
+            sessionId,
+            issuedAt,
+            expiresAt,
+            fingerprintHash: tokenData.fingerprintHash, // Bind session to the device fingerprint
+        };
+
+        const sessionKey = `auth:session:${sessionId}`;
+        await this.redisService.set(sessionKey, JSON.stringify(sessionPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+
+        // 4. Audit Log Success
+        this.auditRepository.log(AuditAction.LOGIN_SUCCESS, { userId: user.id, sessionId, ipAddress, userAgent: metadata.userAgent });
+
+        // 5. Notify user of new login (Security Feature)
+        await this.emailService.sendNewDeviceNotification(user.id, user.email, metadata);
+
+        return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
     }

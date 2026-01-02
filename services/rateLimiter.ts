@@ -85,5 +85,96 @@ export class RateLimiterService {
         return false;
     }
 
-}
+    // --- Public Interface Methods ---
+
+    /**
+     * Checks the global rate limit for an incoming IP address.
+     * @param ipAddress - The client's IP address.
+     * @returns True if rate limited.
+     */
+    public async checkGlobalLimit(ipAddress: string): Promise<boolean> {
+        return this.checkLimit(ipAddress, 'global');
+    }
+
+    /**
+     * Checks the rate limit for login link requests per email address (anti-flooding).
+     * @param email - The user's email address.
+     * @returns True if rate limited.
+     */
+    public async checkEmailRequestLimit(email: string): Promise<boolean> {
+        return this.checkLimit(email, 'loginRequest');
+    }
+
+    /**
+     * Increments the count for a successful email request.
+     * This is separate from `checkLimit` as it's a dedicated counter.
+     * @param email - The user's email address.
+     */
+    public async incrementEmailRequest(email: string): Promise<void> {
+        // We call checkLimit which handles the increment and expiry logic
+        await this.checkLimit(email, 'loginRequest');
+    }
+
+    /**
+     * Checks the rate limit for token verification attempts (anti-brute force).
+     * @param challengeId - The unique ID of the token being verified.
+     * @returns True if rate limited.
+     */
+    public async checkVerificationAttemptLimit(challengeId: string): Promise<boolean> {
+        return this.checkLimit(challengeId, 'verificationAttempt');
+    }
+
+    /**
+     * Checks the rate limit for account creation attempts per IP (anti-spam).
+     * @param ipAddress - The client's IP address.
+     * @returns True if rate limited.
+     */
+    public async checkSignupLimit(ipAddress: string): Promise<boolean> {
+        return this.checkLimit(ipAddress, 'signup');
+    }
+
+    // --- Failed Login/Attempt Tracking (For Account Lockout Logic) ---
+
+    /**
+     * Increments the failed login attempt counter for an email.
+     * This is used by the AuthService to trigger account lockout.
+     * @param email - The user's email address.
+     * @returns The current failed attempt count.
+     */
+    public async incrementLoginAttempt(email: string): Promise<number> {
+        const config = this.configs.failedLogin;
+        const redisKey = config.prefix + email;
+        const currentCount = await this.redisService.incr(redisKey);
+
+        if (currentCount === 1) {
+            // First hit, set the expiration window (24 hours)
+            await this.redisService.expire(redisKey, config.window);
+        }
+
+        this.logger.warn(`Failed login attempt for ${email}. Count: ${currentCount}/${config.max}`);
+        return currentCount;
+    }
+
+    /**
+     * Resets the failed login attempt counter upon successful login.
+     * @param email - The user's email address.
+     */
+    public async resetLoginAttempt(email: string): Promise<void> {
+        const config = this.configs.failedLogin;
+        const redisKey = config.prefix + email;
+        await this.redisService.del(redisKey);
+        this.logger.info(`Reset failed login attempts for ${email}.`);
+    }
+
+    /**
+     * Retrieves the current count of failed login attempts for an email.
+     * @param email - The user's email address.
+     * @returns The current failed attempt count.
+     */
+    public async getFailedAttemptCount(email: string): Promise<number> {
+        const config = this.configs.failedLogin;
+        const redisKey = config.prefix + email;
+        const count = await this.redisService.get(redisKey);
+        return count ? parseInt(count, 10) : 0;
+    }
 }

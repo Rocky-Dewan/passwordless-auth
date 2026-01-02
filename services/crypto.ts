@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -6,7 +6,6 @@ import { injectable } from 'tsyringe';
 import { Logger } from '../src/utils/logger';
 
 // --- Configuration Constants ---
-const hash = crypto.createHash('sha256').update(Buffer).digest('hex');
 const OTP_LENGTH = 6;
 const TOKEN_LENGTH_BYTES = 32;
 const CHALLENGE_LENGTH_BYTES = 16;
@@ -21,7 +20,7 @@ const ARGON2_CONFIG: argon2.Options = {
     memoryCost: 2 ** 16, // 64MB
     timeCost: 4,
     parallelism: 1,
-    //saltLength: 16,
+    saltLength: 16,
     hashLength: 32,
 };
 
@@ -197,6 +196,25 @@ export class CryptoService {
             secChUaPlatform: secChUaPlatform ? secChUaPlatform.substring(0, 50) : undefined,
         };
     }
-  }
 
+    /**
+     * Normalizes an IP address to a common format and potentially truncates it
+     * to the subnet level (e.g., /24 for IPv4, /64 for IPv6) for privacy and stability.
+     * @param ip - The raw IP address string.
+     * @returns The normalized/truncated IP string.
+     */
+    private normalizeIpAddress(ip: string): string {
+        // Simple truncation for IPv4 (e.g., 192.168.1.x -> 192.168.1.0)
+        // In a real-world scenario, this should use a proper IP library.
+        if (ip.includes('.')) {
+            const parts = ip.split('.');
+            if (parts.length === 4) {
+                // Truncate to /24 (the last octet is set to 0)
+                return parts.slice(0, 3).join('.') + '.0';
+            }
+        }
+        // For IPv6, a similar truncation to /64 should be performed.
+        // For simplicity here, we just return the raw IP if it's not a standard IPv4.
+        return ip;
+    }
 }

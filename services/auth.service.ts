@@ -45,11 +45,7 @@ export class AuthError extends Error {
     }
 }
 
-/**
- * @injectable
- * Centralized service for all authentication-related business logic.
- * Implements the security policies defined in the threat model.
- */
+
 @injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);

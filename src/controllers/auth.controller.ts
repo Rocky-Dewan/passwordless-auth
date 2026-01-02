@@ -24,10 +24,7 @@ interface VerifyRequestBody {
     recoveryCode?: string;
 }
 
-/**
- * @injectable
- * Controller responsible for processing all authentication-related HTTP requests.
- */
+
 @injectable()
 export class AuthController {
     private readonly logger = new Logger(AuthController.name);
@@ -156,5 +153,29 @@ export class AuthController {
 
         next();
     };
+// --- 3. Handler Functions ---
+
+    /**
+     * Handles the initial login/magic link request.
+     */
+    private handleLogin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const { email } = req.body as LoginRequestBody;
+
+        try {
+            // The service handles all security checks (rate limiting, account status)
+            await this.authService.initiateLogin(req, email);
+
+            // Respond with a generic success message to prevent email enumeration
+            res.status(StatusCodes.OK).json({
+                status: 'success',
+                message: 'If an account exists for this email, a login link has been sent.',
+            });
+        } catch (error) {
+            // Pass the error to the error handler middleware
+            next(error);
+        }
+    };
+
 
 }
+

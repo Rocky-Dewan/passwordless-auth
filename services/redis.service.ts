@@ -183,3 +183,4 @@ export class RedisService {
         return this.isConnected;
     }
 }
+}

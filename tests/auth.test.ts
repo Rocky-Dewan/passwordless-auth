@@ -1,4 +1,3 @@
-
 import 'reflect-metadata';
 import { container } from 'tsyringe';
 import { expect } from 'chai';
@@ -71,4 +70,5 @@ describe('Passwordless Authentication System Tests (500+ Lines)', () => {
     sinon.restore();
   });
 
+ }
 }

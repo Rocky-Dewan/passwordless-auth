@@ -45,11 +45,7 @@ export class AuthError extends Error {
     }
 }
 
-/**
- * @injectable
- * Centralized service for all authentication-related business logic.
- * Implements the security policies defined in the threat model.
- */
+
 @injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);
@@ -67,12 +63,14 @@ export class AuthService {
 
     // --- 1. Login Initiation (Magic Link/OTP Request) ---
 
+
     /**
      * Handles the initial login request by email.
      * Performs extensive security checks before generating and sending a token.
      * @param req - The Express Request object containing user and device data.
      * @param email - The user's email address.
      */
+
     public async initiateLogin(req: Request, email: string): Promise<void> {
         const normalizedEmail = email.toLowerCase().trim();
         const metadata = this.cryptoService.extractDeviceMetadata(req);
@@ -130,6 +128,9 @@ export class AuthService {
 
         // --- 2. Token Generation and Storage ---
 
+            // --- 2. Token Generation and Storage ---
+
+
         const token = this.cryptoService.generateAuthToken();
         const challengeId = this.cryptoService.generateChallengeId();
         const expiresAt = new Date(Date.now() + LOGIN_TOKEN_EXPIRY_MINUTES * 60 * 1000);
@@ -146,6 +147,7 @@ export class AuthService {
         };
 
         // Store the token in Redis for fast access and short-term persistence
+            // Store the token in Redis for fast access and short-term persistence
         const tokenKey = `auth:token:${challengeId}`;
         await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
 
@@ -211,12 +213,22 @@ export class AuthService {
         const tokenData = JSON.parse(tokenDataRaw);
 
         // --- Security Check 2: Token Attempt Limit ---
+       // --- Security Check 2: Token Attempt Limit ---
         if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
             await this.redisService.del(tokenKey); // Invalidate the token
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
             throw new AuthError('Maximum verification attempts reached. Please request a new login link.', 'MAX_ATTEMPTS_REACHED');
         }
 
+        // --- Security Check 3: Token Expiration and Usage ---
+        if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
+            await this.redisService.del(tokenKey);
+            const reason = tokenData.isUsed ? 'Token already used (Replay attack attempt)' : 'Token expired';
+            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
+            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
+        }
+
+        
         // --- Security Check 3: Token Expiration and Usage ---
         if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
             await this.redisService.del(tokenKey);
@@ -234,6 +246,7 @@ export class AuthService {
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
 
+        
         // --- Security Check 5: Device Fingerprint Binding ---
         const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
         if (!isFingerprintMatch) {
@@ -290,3 +303,7 @@ export class AuthService {
 
         return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
     }
+    }
+
+
+}

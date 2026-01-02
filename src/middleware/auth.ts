@@ -116,4 +116,49 @@ export class AuthMiddleware {
         next(authError);
     }
 
-}
+    /**
+     * Checks if the session needs to be rotated and performs rotation if necessary.
+     * This is a security measure to mitigate token replay attacks and session hijacking.
+     * @param req - Express Request object.
+     * @param res - Express Response object.
+     * @param payload - The decoded session token payload.
+     */
+    private async checkAndRotateSession(req: Request, res: Response, payload: any): Promise<void> {
+        const lastUsed = payload.iat * 1000; // iat is 'issued at' in seconds, convert to ms
+        const now = Date.now();
+
+        if (now - lastUsed > SESSION_ROTATION_INTERVAL_MS) {
+            this.logger.info(`Session rotation triggered for user ${payload.userId}.`);
+
+            try {
+                const newSessionToken = await this.authService.rotateSession(payload);
+
+                // Set the new session token in a secure HttpOnly cookie
+                res.cookie(SESSION_COOKIE_NAME, newSessionToken, {
+                    httpOnly: true,
+                    secure: process.env.NODE_ENV === 'production',
+                    sameSite: 'strict',
+                    maxAge: 1000 * 60 * 60 * 24 * 7, // Re-set the max age
+                    path: '/',
+                });
+
+                // Update the request object with the new session token
+                req.sessionToken = newSessionToken;
+
+                this.authService.auditRepository.log(
+                    'SESSION_ROTATED' as any,
+                    {
+                        userId: payload.userId,
+                        sessionId: payload.sessionId,
+                        ipAddress: req.ip,
+                        userAgent: req.get('User-Agent'),
+                    },
+                    AuthMiddleware.name
+                );
+
+            } catch (error) {
+                this.logger.error('Failed to rotate session token.', { error });
+                // Do not fail the request, but log the error. The old token is still valid until expiration.
+            }
+        }
+    }

@@ -63,6 +63,14 @@ export class AuthService {
 
     // --- 1. Login Initiation (Magic Link/OTP Request) ---
 
+
+    /**
+     * Handles the initial login request by email.
+     * Performs extensive security checks before generating and sending a token.
+     * @param req - The Express Request object containing user and device data.
+     * @param email - The user's email address.
+     */
+
     public async initiateLogin(req: Request, email: string): Promise<void> {
         const normalizedEmail = email.toLowerCase().trim();
         const metadata = this.cryptoService.extractDeviceMetadata(req);
@@ -118,7 +126,10 @@ export class AuthService {
             throw new AuthError('Too many login requests for this account. Please wait a few minutes.', 'EMAIL_RATE_LIMITED');
         }
 
+        // --- 2. Token Generation and Storage ---
+
             // --- 2. Token Generation and Storage ---
+
 
         const token = this.cryptoService.generateAuthToken();
         const challengeId = this.cryptoService.generateChallengeId();
@@ -135,6 +146,7 @@ export class AuthService {
             attemptCount: 0,
         };
 
+        // Store the token in Redis for fast access and short-term persistence
             // Store the token in Redis for fast access and short-term persistence
         const tokenKey = `auth:token:${challengeId}`;
         await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
@@ -155,6 +167,7 @@ export class AuthService {
             this.auditRepository.log(AuditAction.EMAIL_SEND_FAILED, { userId: user.id, challengeId });
         }
     }
+
     /**
      * Generates the secure, stateful login link.
      * @param token - The authentication token.
@@ -198,6 +211,8 @@ export class AuthService {
         }
 
         const tokenData = JSON.parse(tokenDataRaw);
+
+        // --- Security Check 2: Token Attempt Limit ---
        // --- Security Check 2: Token Attempt Limit ---
         if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
             await this.redisService.del(tokenKey); // Invalidate the token
@@ -230,6 +245,7 @@ export class AuthService {
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
+
         
         // --- Security Check 5: Device Fingerprint Binding ---
         const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
@@ -246,6 +262,47 @@ export class AuthService {
             await this.redisService.del(tokenKey); // Invalidate token immediately
             throw new AuthError('Security violation detected. Please request a new login link.', 'SECURITY_VIOLATION');
         }
+
+        // --- Success: Invalidate Token and Create Session ---
+
+        // 1. Mark token as used and delete from Redis
+        tokenData.isUsed = true;
+        await this.redisService.del(tokenKey);
+
+        // 2. Load user and update last login
+        const user = await this.userRepository.findById(tokenData.userId);
+        if (!user) {
+            throw new AuthError('User not found after successful verification.', 'USER_NOT_FOUND');
+        }
+        user.lastLogin = new Date();
+        user.failedLoginAttempts = 0;
+        await this.userRepository.save(user);
+
+        // 3. Create Session
+        const sessionToken = this.cryptoService.generateSessionToken();
+        const sessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+        const sessionPayload: SessionPayload = {
+            userId: user.id,
+            sessionId,
+            issuedAt,
+            expiresAt,
+            fingerprintHash: tokenData.fingerprintHash, // Bind session to the device fingerprint
+        };
+
+        const sessionKey = `auth:session:${sessionId}`;
+        await this.redisService.set(sessionKey, JSON.stringify(sessionPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+
+        // 4. Audit Log Success
+        this.auditRepository.log(AuditAction.LOGIN_SUCCESS, { userId: user.id, sessionId, ipAddress, userAgent: metadata.userAgent });
+
+        // 5. Notify user of new login (Security Feature)
+        await this.emailService.sendNewDeviceNotification(user.id, user.email, metadata);
+
+        return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
+    }
     }
 
 

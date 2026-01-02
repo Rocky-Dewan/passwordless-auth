@@ -1,6 +1,7 @@
+
 import { Request, Response, NextFunction, Router } from 'express';
 import { injectable, inject } from 'tsyringe';
-import { StatusCodes } from 'http-status-codes';
+import { HttpStatusCode } from 'http-status-codes';
 import { AuthService, AuthError } from '../../services/auth.service';
 import { Logger } from '../utils/logger';
 import { RateLimiterService } from '../../services/rateLimiter';
@@ -24,7 +25,10 @@ interface VerifyRequestBody {
     recoveryCode?: string;
 }
 
-
+/**
+ * @injectable
+ * Controller responsible for processing all authentication-related HTTP requests.
+ */
 @injectable()
 export class AuthController {
     private readonly logger = new Logger(AuthController.name);
@@ -62,11 +66,11 @@ export class AuthController {
     /**
      * Middleware to validate the login request body (email format).
      */
-    private validateLoginRequest = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+    private validateLoginRequest = (req: Request, res: Response, next: NextFunction): void => {
         const { email } = req.body as LoginRequestBody;
 
         if (!email || typeof email !== 'string' || email.trim().length === 0) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Email is required.',
                 code: 'VALIDATION_ERROR',
@@ -75,7 +79,7 @@ export class AuthController {
 
         // Basic email format check (more robust validation is done in the service)
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Invalid email format.',
                 code: 'VALIDATION_ERROR',
@@ -84,7 +88,7 @@ export class AuthController {
 
         // Additional sanity checks
         if (email.length > 255) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Email is too long.',
                 code: 'VALIDATION_ERROR',
@@ -97,11 +101,11 @@ export class AuthController {
     /**
      * Middleware to validate the token verification request query parameters.
      */
-    private validateVerificationRequest = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+    private validateVerificationRequest = (req: Request, res: Response, next: NextFunction): void => {
         const { token, challengeId } = req.query as { token: string; challengeId: string };
 
         if (!token || !challengeId) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Missing token or challenge ID.',
                 code: 'VALIDATION_ERROR',
@@ -110,7 +114,7 @@ export class AuthController {
 
         // Token and challenge ID length/format validation (assuming base64url format)
         if (token.length < 32 || challengeId.length < 16) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Token or challenge ID format is invalid.',
                 code: 'VALIDATION_ERROR',
@@ -123,11 +127,11 @@ export class AuthController {
     /**
      * Middleware to validate recovery code verification request body.
      */
-    private validateRecoveryVerification = (req: Request, res: Response, next: NextFunction): Response<any, Record<string, any>> | void => {
+    private validateRecoveryVerification = (req: Request, res: Response, next: NextFunction): void => {
         const { email, recoveryCode } = req.body as { email: string; recoveryCode: string };
 
         if (!email || !recoveryCode) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Email and recovery code are required.',
                 code: 'VALIDATION_ERROR',
@@ -135,7 +139,7 @@ export class AuthController {
         }
 
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Invalid email format.',
                 code: 'VALIDATION_ERROR',
@@ -144,7 +148,7 @@ export class AuthController {
 
         // Recovery code format validation (e.g., XXXX-XXXX-XXXX-XXXX)
         if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(recoveryCode.toUpperCase())) {
-            return res.status(StatusCodes.BAD_REQUEST).json({
+            return res.status(HttpStatusCode.BAD_REQUEST).json({
                 status: 'error',
                 message: 'Invalid recovery code format.',
                 code: 'VALIDATION_ERROR',
@@ -153,7 +157,8 @@ export class AuthController {
 
         next();
     };
-// --- 3. Handler Functions ---
+
+    // --- 3. Handler Functions ---
 
     /**
      * Handles the initial login/magic link request.
@@ -166,7 +171,7 @@ export class AuthController {
             await this.authService.initiateLogin(req, email);
 
             // Respond with a generic success message to prevent email enumeration
-            res.status(StatusCodes.OK).json({
+            res.status(HttpStatusCode.OK).json({
                 status: 'success',
                 message: 'If an account exists for this email, a login link has been sent.',
             });
@@ -176,6 +181,51 @@ export class AuthController {
         }
     };
 
+    /**
+     * Handles the token verification request from the magic link.
+     */
+    private handleVerification = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const { token, challengeId } = req.query as { token: string; challengeId: string };
 
+        try {
+            // The service validates the token, challenge, expiration, and device fingerprint
+            const sessionToken = await this.authService.verifyTokenAndCreateSession(req, token, challengeId);
+
+            // Set the session token in a secure HttpOnly cookie
+            res.cookie(SESSION_COOKIE_NAME, sessionToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production', // Use secure in production
+                sameSite: 'strict', // CSRF protection
+                maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+                path: '/',
+            });
+
+            // Set the CSRF secret cookie (not HttpOnly) for the client to read and submit in headers
+            const csrfSecret = this.csrfMiddleware.generateSecret();
+            const csrfToken = this.csrfMiddleware.generateToken(csrfSecret);
+
+            res.cookie(CSRF_COOKIE_NAME, csrfSecret, {
+                httpOnly: true, // Should be HttpOnly for the secret!
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                maxAge: 1000 * 60 * 60 * 24 * 7,
+                path: '/',
+            });
+
+            // Redirect the user to the frontend dashboard or a success page
+            res.redirect(FRONTEND_LOGIN_REDIRECT);
+
+            // NOTE: We don't send the CSRF token in a cookie, but rather let the client
+            // read the secret from the HttpOnly cookie and generate the token, or
+            // send the token in the response body/header of the redirect target.
+            // For a robust implementation, the secret should be in the HttpOnly cookie,
+            // and the token should be in a separate, non-HttpOnly cookie or a response header.
+            // We will use the HttpOnly secret/token pattern for maximum security.
+            // The CSRF middleware will handle the token generation/validation.
+
+        } catch (error) {
+            // Pass the error to the error handler middleware
+            next(error);
+        }
+    };
 }
-

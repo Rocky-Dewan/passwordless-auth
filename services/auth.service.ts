@@ -63,12 +63,6 @@ export class AuthService {
 
     // --- 1. Login Initiation (Magic Link/OTP Request) ---
 
-    /**
-     * Handles the initial login request by email.
-     * Performs extensive security checks before generating and sending a token.
-     * @param req - The Express Request object containing user and device data.
-     * @param email - The user's email address.
-     */
     public async initiateLogin(req: Request, email: string): Promise<void> {
         const normalizedEmail = email.toLowerCase().trim();
         const metadata = this.cryptoService.extractDeviceMetadata(req);

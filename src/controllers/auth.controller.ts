@@ -24,10 +24,7 @@ interface VerifyRequestBody {
     recoveryCode?: string;
 }
 
-/**
- * @injectable
- * Controller responsible for processing all authentication-related HTTP requests.
- */
+
 @injectable()
 export class AuthController {
     private readonly logger = new Logger(AuthController.name);
@@ -181,3 +178,4 @@ export class AuthController {
 
 
 }
+

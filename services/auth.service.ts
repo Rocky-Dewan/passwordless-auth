@@ -256,6 +256,7 @@ export class AuthService {
             await this.redisService.del(tokenKey); // Invalidate token immediately
             throw new AuthError('Security violation detected. Please request a new login link.', 'SECURITY_VIOLATION');
         }
+    }
 
 
 }

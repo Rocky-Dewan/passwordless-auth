@@ -130,6 +130,9 @@ export class AuthService {
 
         // --- 2. Token Generation and Storage ---
 
+            // --- 2. Token Generation and Storage ---
+
+
         const token = this.cryptoService.generateAuthToken();
         const challengeId = this.cryptoService.generateChallengeId();
         const expiresAt = new Date(Date.now() + LOGIN_TOKEN_EXPIRY_MINUTES * 60 * 1000);
@@ -146,6 +149,7 @@ export class AuthService {
         };
 
         // Store the token in Redis for fast access and short-term persistence
+            // Store the token in Redis for fast access and short-term persistence
         const tokenKey = `auth:token:${challengeId}`;
         await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
 
@@ -211,6 +215,7 @@ export class AuthService {
         const tokenData = JSON.parse(tokenDataRaw);
 
         // --- Security Check 2: Token Attempt Limit ---
+       // --- Security Check 2: Token Attempt Limit ---
         if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
             await this.redisService.del(tokenKey); // Invalidate the token
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
@@ -234,6 +239,7 @@ export class AuthService {
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
 
+        
         // --- Security Check 5: Device Fingerprint Binding ---
         const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
         if (!isFingerprintMatch) {
@@ -289,6 +295,7 @@ export class AuthService {
         await this.emailService.sendNewDeviceNotification(user.id, user.email, metadata);
 
         return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
+    }
     }
 
     // --- 3. Session Validation and Management ---

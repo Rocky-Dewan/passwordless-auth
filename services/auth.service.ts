@@ -45,7 +45,11 @@ export class AuthError extends Error {
     }
 }
 
-
+/**
+ * @injectable
+ * Centralized service for all authentication-related business logic.
+ * Implements the security policies defined in the threat model.
+ */
 @injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);
@@ -63,6 +67,12 @@ export class AuthService {
 
     // --- 1. Login Initiation (Magic Link/OTP Request) ---
 
+    /**
+     * Handles the initial login request by email.
+     * Performs extensive security checks before generating and sending a token.
+     * @param req - The Express Request object containing user and device data.
+     * @param email - The user's email address.
+     */
     public async initiateLogin(req: Request, email: string): Promise<void> {
         const normalizedEmail = email.toLowerCase().trim();
         const metadata = this.cryptoService.extractDeviceMetadata(req);
@@ -118,7 +128,7 @@ export class AuthService {
             throw new AuthError('Too many login requests for this account. Please wait a few minutes.', 'EMAIL_RATE_LIMITED');
         }
 
-            // --- 2. Token Generation and Storage ---
+        // --- 2. Token Generation and Storage ---
 
         const token = this.cryptoService.generateAuthToken();
         const challengeId = this.cryptoService.generateChallengeId();
@@ -135,7 +145,7 @@ export class AuthService {
             attemptCount: 0,
         };
 
-            // Store the token in Redis for fast access and short-term persistence
+        // Store the token in Redis for fast access and short-term persistence
         const tokenKey = `auth:token:${challengeId}`;
         await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
 
@@ -155,6 +165,7 @@ export class AuthService {
             this.auditRepository.log(AuditAction.EMAIL_SEND_FAILED, { userId: user.id, challengeId });
         }
     }
+
     /**
      * Generates the secure, stateful login link.
      * @param token - The authentication token.
@@ -198,22 +209,14 @@ export class AuthService {
         }
 
         const tokenData = JSON.parse(tokenDataRaw);
-       // --- Security Check 2: Token Attempt Limit ---
+
+        // --- Security Check 2: Token Attempt Limit ---
         if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
             await this.redisService.del(tokenKey); // Invalidate the token
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
             throw new AuthError('Maximum verification attempts reached. Please request a new login link.', 'MAX_ATTEMPTS_REACHED');
         }
 
-        // --- Security Check 3: Token Expiration and Usage ---
-        if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
-            await this.redisService.del(tokenKey);
-            const reason = tokenData.isUsed ? 'Token already used (Replay attack attempt)' : 'Token expired';
-            this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason, ipAddress });
-            throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
-        }
-
-        
         // --- Security Check 3: Token Expiration and Usage ---
         if (Date.now() > tokenData.expiresAt || tokenData.isUsed) {
             await this.redisService.del(tokenKey);
@@ -230,7 +233,7 @@ export class AuthService {
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
-        
+
         // --- Security Check 5: Device Fingerprint Binding ---
         const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
         if (!isFingerprintMatch) {
@@ -246,7 +249,160 @@ export class AuthService {
             await this.redisService.del(tokenKey); // Invalidate token immediately
             throw new AuthError('Security violation detected. Please request a new login link.', 'SECURITY_VIOLATION');
         }
+
+        // --- Success: Invalidate Token and Create Session ---
+
+        // 1. Mark token as used and delete from Redis
+        tokenData.isUsed = true;
+        await this.redisService.del(tokenKey);
+
+        // 2. Load user and update last login
+        const user = await this.userRepository.findById(tokenData.userId);
+        if (!user) {
+            throw new AuthError('User not found after successful verification.', 'USER_NOT_FOUND');
+        }
+        user.lastLogin = new Date();
+        user.failedLoginAttempts = 0;
+        await this.userRepository.save(user);
+
+        // 3. Create Session
+        const sessionToken = this.cryptoService.generateSessionToken();
+        const sessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+        const sessionPayload: SessionPayload = {
+            userId: user.id,
+            sessionId,
+            issuedAt,
+            expiresAt,
+            fingerprintHash: tokenData.fingerprintHash, // Bind session to the device fingerprint
+        };
+
+        const sessionKey = `auth:session:${sessionId}`;
+        await this.redisService.set(sessionKey, JSON.stringify(sessionPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+
+        // 4. Audit Log Success
+        this.auditRepository.log(AuditAction.LOGIN_SUCCESS, { userId: user.id, sessionId, ipAddress, userAgent: metadata.userAgent });
+
+        // 5. Notify user of new login (Security Feature)
+        await this.emailService.sendNewDeviceNotification(user.id, user.email, metadata);
+
+        return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
     }
 
+    // --- 3. Session Validation and Management ---
 
+    /**
+     * Validates a session token from an incoming request.
+     * Performs strict device fingerprint and session integrity checks.
+     * @param req - The Express Request object.
+     * @param sessionToken - The opaque session token from the cookie.
+     * @returns The validated SessionPayload.
+     */
+    public async validateSession(req: Request, sessionToken: string): Promise<SessionPayload> {
+        // In a real system, the sessionToken is a key to look up the sessionId.
+        // For simplicity, we'll assume the sessionToken *is* the sessionId for Redis lookup,
+        // or we use a separate mapping table (which is better). Let's use a mapping for security.
+
+        const mappingKey = `auth:token_to_session:${sessionToken}`;
+        const sessionId = await this.redisService.get(mappingKey);
+
+        if (!sessionId) {
+            throw new AuthError('Invalid or expired session token.', 'SESSION_INVALID');
+        }
+
+        const sessionKey = `auth:session:${sessionId}`;
+        const sessionDataRaw = await this.redisService.get(sessionKey);
+
+        if (!sessionDataRaw) {
+            await this.redisService.del(mappingKey);
+            throw new AuthError('Session data not found (expired or revoked).', 'SESSION_REVOKED');
+        }
+
+        const sessionPayload: SessionPayload = JSON.parse(sessionDataRaw);
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
+
+        // --- Security Check 1: Expiration ---
+        if (Date.now() > sessionPayload.expiresAt) {
+            await this.revokeSession(sessionPayload.sessionId, sessionToken);
+            this.auditRepository.log(AuditAction.SESSION_EXPIRED, { userId: sessionPayload.userId, sessionId });
+            throw new AuthError('Session expired.', 'SESSION_EXPIRED');
+        }
+
+        // --- Security Check 2: Device Fingerprint Check (Session Binding) ---
+        const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, sessionPayload.fingerprintHash);
+        if (!isFingerprintMatch) {
+            // High-severity security alert: Potential session hijacking
+            this.auditRepository.log(AuditAction.SECURITY_ALERT_HIGH, {
+                userId: sessionPayload.userId,
+                sessionId,
+                reason: 'Session hijacking attempt (Device fingerprint mismatch)',
+                ipAddress,
+                storedHash: sessionPayload.fingerprintHash,
+                currentHash: this.cryptoService.createDeviceFingerprintHash(metadata),
+            });
+            await this.revokeSession(sessionPayload.sessionId, sessionToken);
+            throw new AuthError('Session security violation. Session revoked.', 'SESSION_HIJACKED');
+        }
+
+        // --- Security Check 3: Session Rotation (Optional, for high-value transactions) ---
+        // If a high-value action is performed, a session rotation can be forced here.
+        // E.g., if (req.path.includes('/settings/change-email')) { return this.rotateSession(sessionPayload); }
+
+        return sessionPayload;
+    }
+
+    /**
+     * Revokes a session by deleting it from Redis.
+     * @param sessionId - The unique ID of the session.
+     * @param sessionToken - The token used to access the session.
+     */
+    public async revokeSession(sessionId: string, sessionToken: string): Promise<void> {
+        const sessionKey = `auth:session:${sessionId}`;
+        const mappingKey = `auth:token_to_session:${sessionToken}`;
+        await this.redisService.del(sessionKey);
+        await this.redisService.del(mappingKey);
+        this.logger.info(`Session revoked: ${sessionId}`);
+    }
+
+    /**
+     * Rotates a session, creating a new session ID and token but preserving the user context.
+     * This is crucial after sensitive operations or to mitigate session fixation.
+     * @param oldPayload - The current session payload.
+     * @returns The new session token.
+     */
+    public async rotateSession(oldPayload: SessionPayload): Promise<string> {
+        // 1. Revoke the old session
+        // NOTE: We need the original sessionToken to revoke the mapping, which is not in the payload.
+        // In a real implementation, the middleware would pass the sessionToken here.
+        // For now, we only delete the session data based on ID.
+        const oldSessionKey = `auth:session:${oldPayload.sessionId}`;
+        await this.redisService.del(oldSessionKey);
+
+        // 2. Create new session
+        const newSessionToken = this.cryptoService.generateSessionToken();
+        const newSessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+        const newPayload: SessionPayload = {
+            ...oldPayload,
+            sessionId: newSessionId,
+            issuedAt,
+            expiresAt,
+        };
+
+        const newSessionKey = `auth:session:${newSessionId}`;
+        const newMappingKey = `auth:token_to_session:${newSessionToken}`;
+
+        // Store new session and the new token-to-session mapping
+        await this.redisService.set(newSessionKey, JSON.stringify(newPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+        await this.redisService.set(newMappingKey, newSessionId, SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+
+        this.auditRepository.log(AuditAction.SESSION_ROTATED, { userId: oldPayload.userId, oldSessionId: oldPayload.sessionId, newSessionId });
+
+        return newSessionToken;
+    }
 }

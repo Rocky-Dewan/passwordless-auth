@@ -213,4 +213,29 @@ export class EmailService {
 
         return `${header}${body}${footer}`;
     }
+
+    /**
+     * Public method to specifically send a login link email.
+     * @param to - Recipient email address.
+     * @param loginLink - The full magic login link URL.
+     * @param ipAddress - The IP address of the user initiating the login.
+     * @param device - User-Agent string or parsed device info.
+     * @param location - Approximate geographical location.
+     */
+    public async sendLoginLink(to: string, loginLink: string, ipAddress: string, device: string, location: string): Promise<void> {
+        const timestamp = new Date().toUTCString();
+        await this.sendEmail({
+            to,
+            type: EmailType.LOGIN_LINK,
+            subject: `Your Secure Login Link for ${APP_NAME}`,
+            templateData: {
+                appName: APP_NAME,
+                link: loginLink,
+                ipAddress,
+                device,
+                location,
+                timestamp,
+            },
+        });
+    }
 }

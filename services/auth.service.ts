@@ -130,9 +130,6 @@ export class AuthService {
 
         // --- 2. Token Generation and Storage ---
 
-        // --- 2. Token Generation and Storage ---
-
-
         const token = this.cryptoService.generateAuthToken();
         const challengeId = this.cryptoService.generateChallengeId();
         const expiresAt = new Date(Date.now() + LOGIN_TOKEN_EXPIRY_MINUTES * 60 * 1000);
@@ -148,7 +145,6 @@ export class AuthService {
             attemptCount: 0,
         };
 
-        // Store the token in Redis for fast access and short-term persistence
         // Store the token in Redis for fast access and short-term persistence
         const tokenKey = `auth:token:${challengeId}`;
         await this.redisService.set(tokenKey, JSON.stringify(authToken), LOGIN_TOKEN_EXPIRY_MINUTES * 60);
@@ -215,7 +211,6 @@ export class AuthService {
         const tokenData = JSON.parse(tokenDataRaw);
 
         // --- Security Check 2: Token Attempt Limit ---
-        // --- Security Check 2: Token Attempt Limit ---
         if (tokenData.attemptCount >= MAX_LOGIN_ATTEMPTS) {
             await this.redisService.del(tokenKey); // Invalidate the token
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_BLOCKED, { userId: tokenData.userId, challengeId, reason: 'Max attempts reached', ipAddress });
@@ -238,7 +233,6 @@ export class AuthService {
             this.auditRepository.log(AuditAction.LOGIN_ATTEMPT_FAILED, { userId: tokenData.userId, challengeId, reason: 'Token value mismatch', ipAddress });
             throw new AuthError('Invalid or expired login link.', 'INVALID_TOKEN');
         }
-
 
         // --- Security Check 5: Device Fingerprint Binding ---
         const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, tokenData.fingerprintHash);
@@ -296,7 +290,6 @@ export class AuthService {
 
         return sessionToken; // This is the opaque token returned to the client (to be stored in HttpOnly cookie)
     }
-}
 
     // --- 3. Session Validation and Management ---
 
@@ -307,58 +300,58 @@ export class AuthService {
      * @param sessionToken - The opaque session token from the cookie.
      * @returns The validated SessionPayload.
      */
-    public async validateSession(req: Request, sessionToken: string): Promise < SessionPayload > {
-    // In a real system, the sessionToken is a key to look up the sessionId.
-    // For simplicity, we'll assume the sessionToken *is* the sessionId for Redis lookup,
-    // or we use a separate mapping table (which is better). Let's use a mapping for security.
+    public async validateSession(req: Request, sessionToken: string): Promise<SessionPayload> {
+        // In a real system, the sessionToken is a key to look up the sessionId.
+        // For simplicity, we'll assume the sessionToken *is* the sessionId for Redis lookup,
+        // or we use a separate mapping table (which is better). Let's use a mapping for security.
 
-    const mappingKey = `auth:token_to_session:${sessionToken}`;
-    const sessionId = await this.redisService.get(mappingKey);
+        const mappingKey = `auth:token_to_session:${sessionToken}`;
+        const sessionId = await this.redisService.get(mappingKey);
 
-    if(!sessionId) {
-        throw new AuthError('Invalid or expired session token.', 'SESSION_INVALID');
-    }
+        if (!sessionId) {
+            throw new AuthError('Invalid or expired session token.', 'SESSION_INVALID');
+        }
 
         const sessionKey = `auth:session:${sessionId}`;
-    const sessionDataRaw = await this.redisService.get(sessionKey);
+        const sessionDataRaw = await this.redisService.get(sessionKey);
 
-    if(!sessionDataRaw) {
-        await this.redisService.del(mappingKey);
-        throw new AuthError('Session data not found (expired or revoked).', 'SESSION_REVOKED');
-    }
+        if (!sessionDataRaw) {
+            await this.redisService.del(mappingKey);
+            throw new AuthError('Session data not found (expired or revoked).', 'SESSION_REVOKED');
+        }
 
         const sessionPayload: SessionPayload = JSON.parse(sessionDataRaw);
-    const metadata = this.cryptoService.extractDeviceMetadata(req);
-    const { ipAddress } = metadata;
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const { ipAddress } = metadata;
 
-    // --- Security Check 1: Expiration ---
-    if(Date.now() > sessionPayload.expiresAt) {
-    await this.revokeSession(sessionPayload.sessionId, sessionToken);
-    this.auditRepository.log(AuditAction.SESSION_EXPIRED, { userId: sessionPayload.userId, sessionId });
-    throw new AuthError('Session expired.', 'SESSION_EXPIRED');
-}
+        // --- Security Check 1: Expiration ---
+        if (Date.now() > sessionPayload.expiresAt) {
+            await this.revokeSession(sessionPayload.sessionId, sessionToken);
+            this.auditRepository.log(AuditAction.SESSION_EXPIRED, { userId: sessionPayload.userId, sessionId });
+            throw new AuthError('Session expired.', 'SESSION_EXPIRED');
+        }
 
-// --- Security Check 2: Device Fingerprint Check (Session Binding) ---
-const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, sessionPayload.fingerprintHash);
-if (!isFingerprintMatch) {
-    // High-severity security alert: Potential session hijacking
-    this.auditRepository.log(AuditAction.SECURITY_ALERT_HIGH, {
-        userId: sessionPayload.userId,
-        sessionId,
-        reason: 'Session hijacking attempt (Device fingerprint mismatch)',
-        ipAddress,
-        storedHash: sessionPayload.fingerprintHash,
-        currentHash: this.cryptoService.createDeviceFingerprintHash(metadata),
-    });
-    await this.revokeSession(sessionPayload.sessionId, sessionToken);
-    throw new AuthError('Session security violation. Session revoked.', 'SESSION_HIJACKED');
-}
+        // --- Security Check 2: Device Fingerprint Check (Session Binding) ---
+        const isFingerprintMatch = this.cryptoService.verifyDeviceFingerprint(req, sessionPayload.fingerprintHash);
+        if (!isFingerprintMatch) {
+            // High-severity security alert: Potential session hijacking
+            this.auditRepository.log(AuditAction.SECURITY_ALERT_HIGH, {
+                userId: sessionPayload.userId,
+                sessionId,
+                reason: 'Session hijacking attempt (Device fingerprint mismatch)',
+                ipAddress,
+                storedHash: sessionPayload.fingerprintHash,
+                currentHash: this.cryptoService.createDeviceFingerprintHash(metadata),
+            });
+            await this.revokeSession(sessionPayload.sessionId, sessionToken);
+            throw new AuthError('Session security violation. Session revoked.', 'SESSION_HIJACKED');
+        }
 
-// --- Security Check 3: Session Rotation (Optional, for high-value transactions) ---
-// If a high-value action is performed, a session rotation can be forced here.
-// E.g., if (req.path.includes('/settings/change-email')) { return this.rotateSession(sessionPayload); }
+        // --- Security Check 3: Session Rotation (Optional, for high-value transactions) ---
+        // If a high-value action is performed, a session rotation can be forced here.
+        // E.g., if (req.path.includes('/settings/change-email')) { return this.rotateSession(sessionPayload); }
 
-return sessionPayload;
+        return sessionPayload;
     }
 
     /**
@@ -366,13 +359,13 @@ return sessionPayload;
      * @param sessionId - The unique ID of the session.
      * @param sessionToken - The token used to access the session.
      */
-    public async revokeSession(sessionId: string, sessionToken: string): Promise < void> {
-    const sessionKey = `auth:session:${sessionId}`;
-    const mappingKey = `auth:token_to_session:${sessionToken}`;
-    await this.redisService.del(sessionKey);
-    await this.redisService.del(mappingKey);
-    this.logger.info(`Session revoked: ${sessionId}`);
-}
+    public async revokeSession(sessionId: string, sessionToken: string): Promise<void> {
+        const sessionKey = `auth:session:${sessionId}`;
+        const mappingKey = `auth:token_to_session:${sessionToken}`;
+        await this.redisService.del(sessionKey);
+        await this.redisService.del(mappingKey);
+        this.logger.info(`Session revoked: ${sessionId}`);
+    }
 
     /**
      * Rotates a session, creating a new session ID and token but preserving the user context.
@@ -380,38 +373,38 @@ return sessionPayload;
      * @param oldPayload - The current session payload.
      * @returns The new session token.
      */
-    public async rotateSession(oldPayload: SessionPayload): Promise < string > {
-    // 1. Revoke the old session
-    // NOTE: We need the original sessionToken to revoke the mapping, which is not in the payload.
-    // In a real implementation, the middleware would pass the sessionToken here.
-    // For now, we only delete the session data based on ID.
-    const oldSessionKey = `auth:session:${oldPayload.sessionId}`;
-    await this.redisService.del(oldSessionKey);
+    public async rotateSession(oldPayload: SessionPayload): Promise<string> {
+        // 1. Revoke the old session
+        // NOTE: We need the original sessionToken to revoke the mapping, which is not in the payload.
+        // In a real implementation, the middleware would pass the sessionToken here.
+        // For now, we only delete the session data based on ID.
+        const oldSessionKey = `auth:session:${oldPayload.sessionId}`;
+        await this.redisService.del(oldSessionKey);
 
-    // 2. Create new session
-    const newSessionToken = this.cryptoService.generateSessionToken();
-    const newSessionId = this.cryptoService.generateUUID();
-    const issuedAt = Date.now();
-    const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+        // 2. Create new session
+        const newSessionToken = this.cryptoService.generateSessionToken();
+        const newSessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
-    const newPayload: SessionPayload = {
-        ...oldPayload,
-        sessionId: newSessionId,
-        issuedAt,
-        expiresAt,
-    };
+        const newPayload: SessionPayload = {
+            ...oldPayload,
+            sessionId: newSessionId,
+            issuedAt,
+            expiresAt,
+        };
 
-    const newSessionKey = `auth:session:${newSessionId}`;
-    const newMappingKey = `auth:token_to_session:${newSessionToken}`;
+        const newSessionKey = `auth:session:${newSessionId}`;
+        const newMappingKey = `auth:token_to_session:${newSessionToken}`;
 
-    // Store new session and the new token-to-session mapping
-    await this.redisService.set(newSessionKey, JSON.stringify(newPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
-    await this.redisService.set(newMappingKey, newSessionId, SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+        // Store new session and the new token-to-session mapping
+        await this.redisService.set(newSessionKey, JSON.stringify(newPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+        await this.redisService.set(newMappingKey, newSessionId, SESSION_EXPIRY_DAYS * 24 * 60 * 60);
 
-    this.auditRepository.log(AuditAction.SESSION_ROTATED, { userId: oldPayload.userId, oldSessionId: oldPayload.sessionId, newSessionId });
+        this.auditRepository.log(AuditAction.SESSION_ROTATED, { userId: oldPayload.userId, oldSessionId: oldPayload.sessionId, newSessionId });
 
-    return newSessionToken;
-}
+        return newSessionToken;
+    }
 
     // --- 4. Account Security and Recovery (Placeholder for 500+ lines) ---
 
@@ -420,30 +413,30 @@ return sessionPayload;
      * @param userId - The ID of the user.
      * @returns The list of generated codes.
      */
-    public async generateRecoveryCodes(userId: string): Promise < string[] > {
-    const user = await this.userRepository.findById(userId);
-    if(!user) {
-        throw new AuthError('User not found.', 'USER_NOT_FOUND');
-    }
+    public async generateRecoveryCodes(userId: string): Promise<string[]> {
+        const user = await this.userRepository.findById(userId);
+        if (!user) {
+            throw new AuthError('User not found.', 'USER_NOT_FOUND');
+        }
 
         const codes: string[] = [];
-    const hashedCodes: string[] = [];
-    const NUM_CODES = 10;
+        const hashedCodes: string[] = [];
+        const NUM_CODES = 10;
 
-    for(let i = 0; i <NUM_CODES; i++) {
-    const code = this.cryptoService.generateRecoveryCode();
-    const hashedCode = await this.cryptoService.hashSecret(code);
-    codes.push(code);
-    hashedCodes.push(hashedCode);
-}
+        for (let i = 0; i < NUM_CODES; i++) {
+            const code = this.cryptoService.generateRecoveryCode();
+            const hashedCode = await this.cryptoService.hashSecret(code);
+            codes.push(code);
+            hashedCodes.push(hashedCode);
+        }
 
-// Store only the hashes in the database
-user.recoveryCodeHashes = hashedCodes;
-await this.userRepository.save(user);
-this.auditRepository.log(AuditAction.RECOVERY_CODES_GENERATED, { userId });
-this.emailService.sendRecoveryCodeGenerationNotification(user.email);
+        // Store only the hashes in the database
+        user.recoveryCodeHashes = hashedCodes;
+        await this.userRepository.save(user);
+        this.auditRepository.log(AuditAction.RECOVERY_CODES_GENERATED, { userId });
+        this.emailService.sendRecoveryCodeGenerationNotification(user.email);
 
-return codes; // Return unhashed codes to the user for immediate storage
+        return codes; // Return unhashed codes to the user for immediate storage
     }
 
     /**
@@ -453,75 +446,154 @@ return codes; // Return unhashed codes to the user for immediate storage
      * @param req - The Express Request object.
      * @returns The new session token.
      */
-    public async verifyRecoveryCode(email: string, code: string, req: Request): Promise < string > {
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await this.userRepository.findByEncryptedEmail(normalizedEmail);
+    public async verifyRecoveryCode(email: string, code: string, req: Request): Promise<string> {
+        const normalizedEmail = email.toLowerCase().trim();
+        const user = await this.userRepository.findByEncryptedEmail(normalizedEmail);
 
-    if(!user || user.status === UserStatus.LOCKED) {
-    this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { email: normalizedEmail, reason: 'User not found or locked' });
-    throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
-}
+        if (!user || user.status === UserStatus.LOCKED) {
+            this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { email: normalizedEmail, reason: 'User not found or locked' });
+            throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
+        }
 
-const { recoveryCodeHashes } = user;
-if (!recoveryCodeHashes || recoveryCodeHashes.length === 0) {
-    this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { userId: user.id, reason: 'No codes configured' });
-    throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
-}
+        const { recoveryCodeHashes } = user;
+        if (!recoveryCodeHashes || recoveryCodeHashes.length === 0) {
+            this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { userId: user.id, reason: 'No codes configured' });
+            throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
+        }
 
-let codeIndex = -1;
-let isMatch = false;
+        let codeIndex = -1;
+        let isMatch = false;
 
-// Iterate through all stored hashes to find a match
-for (let i = 0; i < recoveryCodeHashes.length; i++) {
-    const hash = recoveryCodeHashes[i];
-    const verified = await this.cryptoService.verifySecret(hash, code);
-    if (verified) {
-        isMatch = true;
-        codeIndex = i;
-        break;
+        // Iterate through all stored hashes to find a match
+        for (let i = 0; i < recoveryCodeHashes.length; i++) {
+            const hash = recoveryCodeHashes[i];
+            const verified = await this.cryptoService.verifySecret(hash, code);
+            if (verified) {
+                isMatch = true;
+                codeIndex = i;
+                break;
+            }
+        }
+
+        if (!isMatch) {
+            // Log failed attempt and potentially lock out after N failures
+            user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+            if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+                user.status = UserStatus.LOCKED;
+                user.lockedUntil = new Date(Date.now() + ACCOUNT_LOCKOUT_HOURS * 60 * 60 * 1000);
+                this.emailService.sendAccountLockedNotification(user.email);
+                this.auditRepository.log(AuditAction.ACCOUNT_LOCKED, { userId: user.id, reason: 'Max recovery attempts' });
+            }
+            await this.userRepository.save(user);
+            this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { userId: user.id, reason: 'Code mismatch' });
+            throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
+        }
+
+        // Success: Remove the used code and create a session
+        user.recoveryCodeHashes.splice(codeIndex, 1);
+        await this.userRepository.save(user);
+
+        this.auditRepository.log(AuditAction.LOGIN_SUCCESS, { userId: user.id, reason: 'Recovery code used' });
+
+        // Create a new session (reusing logic from verifyTokenAndCreateSession)
+        const metadata = this.cryptoService.extractDeviceMetadata(req);
+        const sessionToken = this.cryptoService.generateSessionToken();
+        const sessionId = this.cryptoService.generateUUID();
+        const issuedAt = Date.now();
+        const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+        const sessionPayload: SessionPayload = {
+            userId: user.id,
+            sessionId,
+            issuedAt,
+            expiresAt,
+            fingerprintHash: this.cryptoService.createDeviceFingerprintHash(metadata),
+        };
+
+        const sessionKey = `auth:session:${sessionId}`;
+        const mappingKey = `auth:token_to_session:${sessionToken}`;
+        await this.redisService.set(sessionKey, JSON.stringify(sessionPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+        await this.redisService.set(mappingKey, sessionId, SESSION_EXPIRY_DAYS * 24 * 60 * 60);
+
+        return sessionToken;
     }
-}
 
-if (!isMatch) {
-    // Log failed attempt and potentially lock out after N failures
-    user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
-    if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
-        user.status = UserStatus.LOCKED;
-        user.lockedUntil = new Date(Date.now() + ACCOUNT_LOCKOUT_HOURS * 60 * 60 * 1000);
-        this.emailService.sendAccountLockedNotification(user.email);
-        this.auditRepository.log(AuditAction.ACCOUNT_LOCKED, { userId: user.id, reason: 'Max recovery attempts' });
+    // --- 5. User Management Functions (for completeness) ---
+
+    /**
+     * Creates a new user account.
+     * @param email - The email of the new user.
+     * @returns The newly created User object.
+     */
+    public async registerUser(email: string): Promise<User> {
+        const normalizedEmail = email.toLowerCase().trim();
+        const encryptedEmail = this.cryptoService.encryptData(normalizedEmail);
+
+        // Check for existing user (using the encrypted email directly for lookup)
+        const existingUser = await this.userRepository.findByEncryptedEmail(normalizedEmail);
+        if (existingUser) {
+            throw new AuthError('User already exists.', 'USER_EXISTS');
+        }
+
+        const newUser: Partial<User> = {
+            id: this.cryptoService.generateUUID(),
+            email: encryptedEmail,
+            status: UserStatus.PENDING_VERIFICATION,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            failedLoginAttempts: 0,
+            lastLogin: null,
+            recoveryCodeHashes: [],
+        };
+
+        const user = await this.userRepository.create(newUser as User);
+        this.auditRepository.log(AuditAction.USER_REGISTERED, { userId: user.id, email: normalizedEmail });
+
+        // Immediately initiate login to complete registration
+        // NOTE: In a real flow, this would be a separate step or a dedicated "verify registration" link.
+        // For simplicity in this combined service, we'll just return the user.
+        // A dedicated registration verification flow would be more secure.
+
+        return user;
     }
-    await this.userRepository.save(user);
-    this.auditRepository.log(AuditAction.RECOVERY_ATTEMPT_FAILED, { userId: user.id, reason: 'Code mismatch' });
-    throw new AuthError('Invalid recovery code or account status.', 'INVALID_RECOVERY');
-}
 
-// Success: Remove the used code and create a session
-user.recoveryCodeHashes.splice(codeIndex, 1);
-await this.userRepository.save(user);
+    /**
+     * Revokes all active sessions for a given user (e.g., on a security event).
+     * @param userId - The ID of the user.
+     */
+    public async revokeAllSessions(userId: string): Promise<void> {
+        // In a real-world scenario, Redis would store a list of active session IDs per user.
+        // We'll simulate this by querying Redis for all keys matching the pattern and deleting them.
+        // NOTE: This is an expensive operation and should be optimized in production.
 
-this.auditRepository.log(AuditAction.LOGIN_SUCCESS, { userId: user.id, reason: 'Recovery code used' });
+        const keys = await this.redisService.keys(`auth:session:*`);
+        let revokedCount = 0;
 
-// Create a new session (reusing logic from verifyTokenAndCreateSession)
-const metadata = this.cryptoService.extractDeviceMetadata(req);
-const sessionToken = this.cryptoService.generateSessionToken();
-const sessionId = this.cryptoService.generateUUID();
-const issuedAt = Date.now();
-const expiresAt = issuedAt + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+        for (const key of keys) {
+            const sessionDataRaw = await this.redisService.get(key);
+            if (sessionDataRaw) {
+                const sessionPayload: SessionPayload = JSON.parse(sessionDataRaw);
+                if (sessionPayload.userId === userId) {
+                    // Find the corresponding token mapping key (expensive simulation)
+                    const tokenKeys = await this.redisService.keys(`auth:token_to_session:*`);
+                    for (const tokenKey of tokenKeys) {
+                        const sessionId = await this.redisService.get(tokenKey);
+                        if (sessionId === sessionPayload.sessionId) {
+                            await this.redisService.del(tokenKey);
+                            break;
+                        }
+                    }
+                    await this.redisService.del(key);
+                    revokedCount++;
+                }
+            }
+        }
 
-const sessionPayload: SessionPayload = {
-    userId: user.id,
-    sessionId,
-    issuedAt,
-    expiresAt,
-    fingerprintHash: this.cryptoService.createDeviceFingerprintHash(metadata),
-};
-
-const sessionKey = `auth:session:${sessionId}`;
-const mappingKey = `auth:token_to_session:${sessionToken}`;
-await this.redisService.set(sessionKey, JSON.stringify(sessionPayload), SESSION_EXPIRY_DAYS * 24 * 60 * 60);
-await this.redisService.set(mappingKey, sessionId, SESSION_EXPIRY_DAYS * 24 * 60 * 60);
-
-return sessionToken;
+        this.auditRepository.log(AuditAction.ALL_SESSIONS_REVOKED, { userId, count: revokedCount });
+        this.logger.warn(`Revoked ${revokedCount} sessions for user ${userId}.`);
+        const user = await this.userRepository.findById(userId);
+        if (user) {
+            this.emailService.sendSecurityAlert(user.email, 'All sessions have been terminated due to a security action.');
+        }
     }
 }

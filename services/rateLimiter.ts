@@ -1,4 +1,3 @@
-
 import { injectable, inject } from 'tsyringe';
 import { RedisService } from './redis.service';
 import { Logger } from '../src/utils/logger';
@@ -177,4 +176,61 @@ export class RateLimiterService {
         const count = await this.redisService.get(redisKey);
         return count ? parseInt(count, 10) : 0;
     }
+
+    // --- Advanced Rate Limiting Techniques (Simulated Leaky Bucket/Sliding Window) ---
+
+    /**
+     * Simulates a Leaky Bucket algorithm check for a high-traffic endpoint.
+     * Uses a list (or ZSET) in Redis to track timestamps.
+     * NOTE: This is a simplified implementation for demonstration.
+     * @param key - The unique identifier.
+     * @param config - The rate limit configuration.
+     * @returns True if rate limited.
+     */
+    private async checkLeakyBucket(key: string, config: RateLimitConfig): Promise<boolean> {
+        const redisKey = `rl:leaky:${config.prefix}${key}`;
+        const now = Date.now();
+        const windowMs = config.window * 1000;
+        const limit = config.max;
+
+        // 1. Remove old requests (outside the window)
+        // In a real implementation, we'd use ZREM by score (timestamp - window)
+        // For simplicity, we just check the count.
+
+        // 2. Add the current request timestamp
+        await this.redisService.redis.lpush(redisKey, now.toString());
+
+        // 3. Trim the list to the maximum size (simulating the bucket capacity)
+        await this.redisService.redis.ltrim(redisKey, 0, limit - 1);
+
+        // 4. Get the current size
+        const currentSize = await this.redisService.redis.llen(redisKey);
+
+        if (currentSize > limit) {
+            // This is a slight abuse of the list structure for simulation.
+            // In a true leaky bucket, the rate is controlled by the rate of removal.
+            this.logger.warn(`Leaky Bucket limit exceeded for key: ${key}. Size: ${currentSize}/${limit}`);
+            return true;
+        }
+
+        // 5. Set expiration on the list
+        await this.redisService.expire(redisKey, config.window);
+
+        return false;
+    }
+
+    /**
+     * Public method to apply the Leaky Bucket logic to a specific IP for a high-security endpoint.
+     * @param ipAddress - The client's IP address.
+     * @returns True if rate limited.
+     */
+    public async checkHighSecurityEndpointLimit(ipAddress: string): Promise<boolean> {
+        const highSecurityConfig: RateLimitConfig = {
+            window: 10, // 10 seconds
+            max: 3, // 3 requests per 10 seconds
+            prefix: 'rl:highsec:ip:',
+        };
+        return this.checkLeakyBucket(ipAddress, highSecurityConfig);
+    }
+
 }

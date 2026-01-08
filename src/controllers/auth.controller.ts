@@ -228,4 +228,149 @@ export class AuthController {
             next(error);
         }
     };
+    /**
+     * Handles user logout and session revoca tion.
+     */
+    private handleLogout = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            // The session token is available via req.sessionToken from AuthMiddleware
+            // @ts-ignore
+            const sessionToken = req.sessionToken as string;
+            // @ts-ignore
+            const sessionId = req.sessionId as string;
+
+            if (sessionToken && sessionId) {
+                await this.authService.revokeSession(sessionId, sessionToken);
+            }
+
+            // Clear the cookies on the client side
+            res.clearCookie(SESSION_COOKIE_NAME, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                path: '/',
+            });
+            res.clearCookie(CSRF_COOKIE_NAME, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                path: '/',
+            });
+
+            res.status(HttpStatusCode.OK).json({
+                status: 'success',
+                message: 'Successfully logged out.',
+            });
+        } catch (error) {
+            next(error);
+        }
+    };
+
+    /**
+     * Handles the request to start the account recovery process (sends recovery codes).
+     */
+    private handleRecoveryStart = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        // NOTE: This endpoint should be highly restricted and likely require a separate MFA/CAPTCHA.
+        // For now, we reuse the login validation.
+        const { email } = req.body as LoginRequestBody;
+
+        try {
+            // In a real system, this would send a link to generate new recovery codes,
+            // or an OTP to confirm the recovery attempt.
+            // For this example, we assume the user already has codes and is attempting to use them.
+
+            res.status(HttpStatusCode.OK).json({
+                status: 'success',
+                message: 'If an account exists, please proceed with your recovery code verification.',
+            });
+        } catch (error) {
+            next(error);
+        }
+    };
+
+    /**
+     * Handles the verification of a recovery code.
+     */
+    private handleRecoveryVerification = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const { email, recoveryCode } = req.body as { email: string; recoveryCode: string };
+
+        try {
+            const sessionToken = await this.authService.verifyRecoveryCode(email, recoveryCode, req);
+
+            // Set secure cookies (same logic as handleVerification)
+            res.cookie(SESSION_COOKIE_NAME, sessionToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                maxAge: 1000 * 60 * 60 * 24 * 7,
+                path: '/',
+            });
+
+            const csrfSecret = this.csrfMiddleware.generateSecret();
+            res.cookie(CSRF_COOKIE_NAME, csrfSecret, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                maxAge: 1000 * 60 * 60 * 24 * 7,
+                path: '/',
+            });
+
+            res.status(HttpStatusCode.OK).json({
+                status: 'success',
+                message: 'Account recovered successfully.',
+                redirect: FRONTEND_LOGIN_REDIRECT,
+            });
+        } catch (error) {
+            next(error);
+        }
+    };
+
+    /**
+     * Handles the registration of a new user.
+     */
+    private handleRegistration = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const { email } = req.body as LoginRequestBody;
+
+        try {
+            // Check for IP-based signup rate limit
+            const isRateLimited = await this.rateLimiterService.checkSignupLimit(req.ip || 'unknown');
+            if (isRateLimited) {
+                throw new AuthError('Too many registration attempts from this IP.', 'SIGNUP_RATE_LIMITED');
+            }
+
+            // The service handles user creation and checks for existence
+            const user = await this.authService.registerUser(email);
+
+            // Immediately initiate the login process to send the verification link
+            await this.authService.initiateLogin(req, email);
+
+            res.status(HttpStatusCode.CREATED).json({
+                status: 'success',
+                message: `Account created for ${user.decryptedEmail}. A verification link has been sent to your email.`,
+            });
+        } catch (error) {
+            next(error);
+        }
+    };
+
+    /**
+     * Handles the request to check the current authentication status.
+     */
+    private handleStatus = (req: Request, res: Response): void => {
+        // This is protected by authMiddleware, so if it reaches here, the user is authenticated.
+        // @ts-ignore
+        const userId = req.userId;
+        // @ts-ignore
+        const sessionId = req.sessionId;
+
+        res.status(HttpStatusCode.OK).json({
+            status: 'authenticated',
+            userId: userId,
+            sessionId: sessionId,
+            message: 'User is currently authenticated.',
+        });
+    };
+
+
+
 }

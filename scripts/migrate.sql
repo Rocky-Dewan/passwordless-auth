@@ -43,13 +43,11 @@ CREATE TABLE IF NOT EXISTS auth.audit_log (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
--- Index for fast lookups by user and time for security reviews
+
 CREATE INDEX IF NOT EXISTS idx_audit_log_user_id_created_at ON auth.audit_log (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON auth.audit_log (action);
 
--- --- 4. Session Table (Optional, if using DB for sessions) ---
--- We are using Redis for primary session storage, but a DB table can be used for
--- long-term session metadata or device management.
+
 CREATE TABLE IF NOT EXISTS auth.session (
     id UUID PRIMARY KEY,
     user_id UUID REFERENCES auth.user(id) ON DELETE CASCADE,
@@ -62,8 +60,7 @@ CREATE TABLE IF NOT EXISTS auth.session (
 
 CREATE INDEX IF NOT EXISTS idx_session_user_id ON auth.session (user_id);
 
--- --- 5. Security Trigger for Auditing User Updates ---
--- Function to update the 'updated_at' column automatically
+
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -72,15 +69,12 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Trigger to call the function on user table updates
+
 CREATE OR REPLACE TRIGGER update_user_updated_at
 BEFORE UPDATE ON auth.user
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
--- --- 6. Security View for GDPR/Privacy Compliance ---
--- This view excludes the encrypted email for most read operations,
--- forcing the application to use the decrypted value only when necessary.
 CREATE OR REPLACE VIEW auth.user_public_view AS
 SELECT
     id,
@@ -95,3 +89,4 @@ SELECT
     created_at,
     updated_at
 FROM auth.user;
+

@@ -75,3 +75,70 @@ export class Audit {
     @Column({ type: 'varchar', length: 100, nullable: true })
     serviceContext!: string | null; // e.g., 'AuthService', 'RateLimiterMiddleware'
 }
+// --- TypeORM Repository: AuditRepository ---
+
+/**
+ * @injectable
+ * Custom repository for Audit Log operations.
+ * Provides a simplified interface for logging and ensures data integrity.
+ */
+@injectable()
+export class AuditRepository {
+    private readonly repository: Repository<Audit>;
+    private readonly logger = new Logger(AuditRepository.name);
+    private readonly securityEvents = [
+        AuditAction.SECURITY_ALERT_HIGH,
+        AuditAction.SECURITY_ALERT_MEDIUM,
+        AuditAction.RATE_LIMIT_EXCEEDED,
+        AuditAction.ACCOUNT_LOCKED,
+        AuditAction.LOGIN_ATTEMPT_BLOCKED,
+        AuditAction.ALL_SESSIONS_REVOKED,
+        AuditAction.RECOVERY_ATTEMPT_FAILED,
+        AuditAction.LOGIN_ATTEMPT_FAILED,
+    ];
+
+    constructor(
+        @inject('DataSource') private dataSource: DataSource,
+        @inject(CryptoService) private cryptoService: CryptoService
+    ) {
+        this.repository = this.dataSource.getRepository(Audit);
+        this.logger.info('AuditRepository initialized.');
+    }
+
+    /**
+     * Logs a new audit event.
+     * @param action - The type of action performed.
+     * @param details - A detailed object containing context for the event.
+     * @param context - The service/module logging the event.
+     */
+    public async log(action: AuditAction, details: any, context?: string): Promise<Audit> {
+        const auditLog = new Audit();
+        auditLog.id = this.cryptoService.generateUUID();
+        auditLog.action = action;
+        auditLog.userId = details.userId || null;
+        auditLog.targetId = details.challengeId || details.sessionId || details.targetId || null;
+        auditLog.ipAddress = details.ipAddress || null;
+        auditLog.serviceContext = context || 'Unknown';
+
+        // Clean up the details object for storage
+        const cleanedDetails = { ...details };
+        delete cleanedDetails.userId;
+        delete cleanedDetails.challengeId;
+        delete cleanedDetails.sessionId;
+        delete cleanedDetails.targetId;
+        delete cleanedDetails.ipAddress;
+
+        auditLog.details = cleanedDetails;
+        auditLog.isSecurityEvent = this.securityEvents.includes(action);
+
+        try {
+            const savedLog = await this.repository.save(auditLog);
+            this.logger.debug(`Audit Logged: ${action}`, { userId: auditLog.userId, ip: auditLog.ipAddress });
+            return savedLog;
+        } catch (error) {
+            this.logger.error(`Failed to save audit log for action: ${action}`, { error, details });
+            // IMPORTANT: In a real system, a failure to log should trigger an immediate alert
+            // and potentially fail the transaction to ensure non-repudiation.
+            throw new Error(`Critical: Failed to save audit log for ${action}`);
+        }
+    }

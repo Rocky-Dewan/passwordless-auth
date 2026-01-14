@@ -87,3 +87,82 @@ export class User {
         this._decryptedEmail = email;
     }
 }
+
+
+// --- TypeORM Repository: UserRepository ---
+
+/**
+ * @injectable
+ * Custom repository for User operations, handling encryption/decryption and security logic.
+ */
+@injectable()
+export class UserRepository {
+    private readonly repository: Repository<User>;
+    private readonly logger = new Logger(UserRepository.name);
+
+    constructor(
+        @inject('DataSource') private dataSource: DataSource,
+        @inject(CryptoService) private cryptoService: CryptoService
+    ) {
+        this.repository = this.dataSource.getRepository(User);
+        this.logger.info('UserRepository initialized.');
+    }
+
+    /**
+     * Helper to normalize an email address for hashing.
+     * @param email - The raw email string.
+     * @returns The normalized email.
+     */
+    private normalizeEmail(email: string): string {
+        return email.toLowerCase().trim();
+    }
+
+    /**
+     * Helper to create the secure hash of the normalized email.
+     * @param normalizedEmail - The normalized email string.
+     * @returns The SHA-256 hash.
+     */
+    private hashEmail(normalizedEmail: string): string {
+        // Use a non-reversible hash for the lookup index
+        return this.cryptoService.generateSha256(normalizedEmail);
+    }
+
+    /**
+     * Hydrates the User entity with the decrypted email and email hash before saving.
+     * @param user - The User entity to be saved.
+     */
+    private prepareUserForSave(user: User): User {
+        if (user.decryptedEmail && user.decryptedEmail !== 'DECRYPTED_EMAIL_NOT_LOADED') {
+            const normalizedEmail = this.normalizeEmail(user.decryptedEmail);
+            user.email = this.cryptoService.encryptData(normalizedEmail);
+            user.emailHash = this.hashEmail(normalizedEmail);
+        } else if (user.email) {
+            // If the decrypted email is not set, ensure the hash is present
+            try {
+                const decrypted = this.cryptoService.decryptData(user.email);
+                user.emailHash = this.hashEmail(this.normalizeEmail(decrypted));
+            } catch (e) {
+                this.logger.error('Failed to decrypt email during save preparation.', { error: e });
+                // If decryption fails, we can't reliably set the hash.
+                // In a production system, this would trigger an alert.
+            }
+        }
+        return user;
+    }
+
+    /**
+     * Hydrates the User entity with the decrypted email after loading.
+     * @param user - The User entity loaded from the database.
+     * @returns The User entity with the decrypted email property set.
+     */
+    private hydrateUserWithDecryptedEmail(user: User): User {
+        try {
+            const decryptedEmail = this.cryptoService.decryptData(user.email);
+            user.decryptedEmail = decryptedEmail;
+        } catch (error) {
+            this.logger.error(`Failed to decrypt email for user ID: ${user.id}. Data corruption possible.`, { error });
+            user.decryptedEmail = 'DECRYPTION_FAILED';
+        }
+        return user;
+    }
+    

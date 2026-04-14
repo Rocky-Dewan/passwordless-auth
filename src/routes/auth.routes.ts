@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import {
   requestAuth,
-  requestAuthWithSession,
   verifyOtp,
   verifyMagicLink,
   logout,
@@ -15,7 +14,7 @@ const router = Router();
 
 // Public routes
 router.get('/csrf-token', getCsrfToken);
-router.post('/request', authLimiter, requestAuthWithSession);
+router.post('/request', authLimiter, requestAuth);
 router.post('/verify-otp', otpLimiter, verifyOtp);
 router.get('/verify-link', verifyMagicLink);
 

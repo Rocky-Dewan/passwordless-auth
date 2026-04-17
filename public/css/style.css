@@ -1,0 +1,2 @@
+/* Base reset - all styles are inline in each HTML file for full control */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

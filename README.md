@@ -4,6 +4,12 @@ A production-quality passwordless authentication system using magic links + OTP,
 
 ---
 
+<div align="center">
+  <a href="https://passwordless-authenticate.vercel.app/"><strong>Explore Passwordless Authentication Live »</strong></a>
+</div>
+
+---
+
 ## How It Works
 
 1. User enters any email (Gmail, Yahoo, Outlook, custom — all accepted)
